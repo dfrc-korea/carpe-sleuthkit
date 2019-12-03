@@ -97,6 +97,8 @@ tsk_fs_open_img(TSK_IMG_INFO * a_img_info, TSK_OFF_T a_offset,
         { "UFS",      ffs_open,     TSK_FS_TYPE_FFS_DETECT     },
         { "YAFFS2",   yaffs2_open,  TSK_FS_TYPE_YAFFS2_DETECT  },
         { "XFS",      xfs_open,     TSK_FS_TYPE_XFS_DETECT     },
+		{ "BTRFS",    btrfs_open,   TSK_FS_TYPE_BTRFS_DETECT   },
+		{ "HIKVISION",	hikvision_open,	TSK_FS_TYPE_HIKVISION_DETECT },
 #if TSK_USE_HFS
         { "HFS",      hfs_open,     TSK_FS_TYPE_HFS_DETECT     },
 #endif
@@ -187,6 +189,12 @@ tsk_fs_open_img(TSK_IMG_INFO * a_img_info, TSK_OFF_T a_offset,
     else if (TSK_FS_TYPE_ISXFS(a_ftype)) {
         return xfs_open(a_img_info, a_offset, a_ftype, 0);
     }
+	else if (TSK_FS_TYPE_ISBTRFS(a_ftype)) {
+		return btrfs_open(a_img_info, a_offset, a_ftype, 0);
+	}
+	else if (TSK_FS_TYPE_ISHIKVISION(a_ftype)) {
+		return hikvision_open(a_img_info, a_offset, a_ftype, 0);
+	}
     tsk_error_reset();
     tsk_error_set_errno(TSK_ERR_FS_UNSUPTYPE);
     tsk_error_set_errstr("%X", (int) a_ftype);

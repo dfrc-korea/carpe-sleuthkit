@@ -802,6 +802,10 @@ extern "C" {
         TSK_FS_TYPE_YAFFS2_DETECT = 0x00004000, ///< YAFFS2 auto detection
         TSK_FS_TYPE_XFS = 0x00008000,           ///< XFS file system
         TSK_FS_TYPE_XFS_DETECT = 0x00008000,    ///< XFS auto detection
+		TSK_FS_TYPE_BTRFS = 0x00010000,			///< Btrfs file system
+		TSK_FS_TYPE_BTRFS_DETECT = 0x00010000,	///< Btrfs auto detection
+		TSK_FS_TYPE_HIKVISION = 0x00040000,
+		TSK_FS_TYPE_HIKVISION_DETECT = 0x00040000,
         TSK_FS_TYPE_UNSUPP = 0xffffffff,        ///< Unsupported file system
     };
     /* NOTE: Update bindings/java/src/org/sleuthkit/datamodel/TskData.java
@@ -877,6 +881,21 @@ extern "C" {
     * is for a raw "file system". */
 #define TSK_FS_TYPE_ISRAW(ftype) \
     (((ftype) & TSK_FS_TYPE_RAW_DETECT)?1:0)
+
+
+	/**
+	* \ingroup fslib
+	* Macro that takes a file system type and returns 1 if the type
+	* is for a YAFFS2 file system. */
+#define TSK_FS_TYPE_ISBTRFS(ftype) \
+    (((ftype) & TSK_FS_TYPE_BTRFS_DETECT)?1:0)
+
+	/**
+	* \ingroup fslib
+	* Macro that takes a file system type and returns 1 if the type
+	* is for a YAFFS2 file system. */
+#define TSK_FS_TYPE_ISHIKVISION(ftype) \
+    (((ftype) & TSK_FS_TYPE_HIKVISION_DETECT)?1:0)
 
 
     /**
