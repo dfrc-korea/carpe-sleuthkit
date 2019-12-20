@@ -172,16 +172,16 @@ typedef struct {
 
 static inline void * hikvision_u64toArray(int x, uint8_t target[]) {
 	uint8_t *p = (uint8_t *)&x;
-
-	for(int i = 0; i < 8; i++) {
+	int i;
+	for(i = 0; i < 8; i++) {
 	    target[i] = p[i];
 	}
 }
 
 static inline void hikvision_u32toArray(int x, uint8_t target[]) {
 	uint8_t *p = (uint8_t *)&x;
-
-	for(int i = 0; i < 4;i++) {
+	int i;
+	for(i = 0; i < 4;i++) {
 	    target[i] = p[i];
 	}
 
@@ -190,8 +190,8 @@ static inline void hikvision_u32toArray(int x, uint8_t target[]) {
 static inline uint8_t * hikvision_u16toArray(int x, uint8_t target[]) {
 	uint8_t *p = (uint8_t *)&x;
 	uint8_t result[2];
-
-	for(int i = 0; i < 2; i++) {
+	int i;
+	for(i = 0; i < 2; i++) {
 	    target[i] = p[i];
 	}
 }
