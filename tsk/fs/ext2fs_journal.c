@@ -40,8 +40,8 @@ load_sb_action(TSK_FS_FILE * fs_file, TSK_OFF_T a_off, TSK_DADDR_T addr,
     char *buf, size_t size, TSK_FS_BLOCK_FLAG_ENUM flags, void *ptr)
 {
     TSK_FS_INFO *fs = fs_file->fs_info;
-    ext2fs_journ_sb *sb;
     EXT2FS_INFO *ext2fs = (EXT2FS_INFO *) fs;
+	ext2fs_journ_sb *sb;
     EXT2FS_JINFO *jinfo = ext2fs->jinfo;
 
     if (size < 1024) {
@@ -62,12 +62,14 @@ load_sb_action(TSK_FS_FILE * fs_file, TSK_OFF_T a_off, TSK_DADDR_T addr,
             jinfo->j_inum, big_tsk_getu32(sb->magic));
         return TSK_WALK_ERROR;
     }
-
+	
     jinfo->bsize = big_tsk_getu32(sb->bsize);
     jinfo->first_block = big_tsk_getu32(sb->first_blk);
     jinfo->last_block = big_tsk_getu32(sb->num_blk) - 1;
     jinfo->start_blk = big_tsk_getu32(sb->start_blk);
     jinfo->start_seq = big_tsk_getu32(sb->start_seq);
+
+	jinfo->fs = (ext2fs_journ_sb *)sb;
 
     return TSK_WALK_STOP;
 }
@@ -123,6 +125,7 @@ ext2fs_jopen(TSK_FS_INFO * fs, TSK_INUM_T inum)
 
     return 0;
 }
+
 
 
 /* Limitations: does not use the action or any flags 
@@ -297,8 +300,11 @@ ext2fs_jentry_walk(TSK_FS_INFO * fs, int flags,
                     }
 
                     /* Increment to the next */
-                    if (big_tsk_getu32(dentry->flag) & EXT2_J_DENTRY_LAST)
+                    if (big_tsk_getu32(dentry->flag) & EXT2_J_DENTRY_LAST1)
                         break;
+
+					if (big_tsk_getu32(dentry->flag) & EXT2_J_DENTRY_LAST2)
+						break;
 
                     /* If the SAMEID value is set, then we advance by the size of the entry, otherwise add 16 for the ID */
                     else if (big_tsk_getu32(dentry->flag) &
@@ -452,8 +458,11 @@ ext2fs_jentry_walk(TSK_FS_INFO * fs, int flags,
                     big_tsk_getu32(dentry->fs_blk));
 
                 /* Increment to the next */
-                if (big_tsk_getu32(dentry->flag) & EXT2_J_DENTRY_LAST)
+                if (big_tsk_getu32(dentry->flag) & EXT2_J_DENTRY_LAST1)
                     break;
+
+				if (big_tsk_getu32(dentry->flag) & EXT2_J_DENTRY_LAST2)
+					break;
 
                 /* If the SAMEID value is set, then we advance by the size of the entry, otherwise add 16 for the ID */
                 else if (big_tsk_getu32(dentry->flag) &

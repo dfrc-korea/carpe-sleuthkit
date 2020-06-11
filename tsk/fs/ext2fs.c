@@ -464,6 +464,7 @@ ext2fs_dinode_load(EXT2FS_INFO * ext2fs, TSK_INUM_T dino_inum,
     TSK_OFF_T addr;
     ssize_t cnt;
     TSK_INUM_T rel_inum;
+
     TSK_FS_INFO *fs = (TSK_FS_INFO *) & ext2fs->fs_info;
 
     /*
@@ -521,7 +522,7 @@ ext2fs_dinode_load(EXT2FS_INFO * ext2fs, TSK_INUM_T dino_inum,
             ("ext2fs_dinode_load: Overflow when calculating address");
             return 1;
         }
-
+			
         addr =
             (TSK_OFF_T) ext4_getu64(fs->endian,
             ext2fs->ext4_grp_buf->bg_inode_table_hi,
@@ -534,8 +535,9 @@ ext2fs_dinode_load(EXT2FS_INFO * ext2fs, TSK_INUM_T dino_inum,
             (TSK_OFF_T) tsk_getu32(fs->endian,
             ext2fs->grp_buf->bg_inode_table) * (TSK_OFF_T) fs->block_size +
             rel_inum * (TSK_OFF_T) ext2fs->inode_size;
-    }
+	}
     tsk_release_lock(&ext2fs->lock);
+
 
     cnt = tsk_fs_read(fs, addr, (char *) dino_buf, ext2fs->inode_size);
 
@@ -547,9 +549,13 @@ ext2fs_dinode_load(EXT2FS_INFO * ext2fs, TSK_INUM_T dino_inum,
         tsk_error_set_errstr2("ext2fs_dinode_load: Inode %" PRIuINUM
             " from %" PRIuOFF, dino_inum, addr);
         return 1;
-    }
+	}
+	dino_buf->block_number = (TSK_OFF_T)(addr / fs->block_size);
+	dino_buf->rel_inum = (TSK_INUM_T)((addr % fs->block_size) / ext2fs->inode_size) + 1;
+
 //DEBUG    printf("Inode Size: %d, %d, %d, %d\n", sizeof(ext2fs_inode), *ext2fs->fs->s_inode_size, ext2fs->inode_size, *ext2fs->fs->s_want_extra_isize);
 //DEBUG    debug_print_buf((char *)dino_buf, ext2fs->inode_size);
+
 
     if (tsk_verbose) {
         tsk_fprintf(stderr,
@@ -583,14 +589,23 @@ static uint8_t
 ext2fs_dinode_copy(EXT2FS_INFO * ext2fs, TSK_FS_META * fs_meta,
     TSK_INUM_T inum, const ext2fs_inode * dino_buf)
 {
-    int i;
+    uint32_t i;
     TSK_FS_INFO *fs = (TSK_FS_INFO *) & ext2fs->fs_info;
     ext2fs_sb *sb = ext2fs->fs;
     EXT2_GRPNUM_T grp_num;
     TSK_INUM_T ibase = 0;
 
+	ext2fs_journ_head * temp_head = NULL;
+	ext2fs_inode * buf = NULL;
+	ext2fs_journ_dentry_V2 * tag_s = NULL;
 
-    if (dino_buf == NULL) {
+	TSK_OFF_T journ_walk;
+	ssize_t cnt;
+	ssize_t len;
+
+	bool isV3 = FALSE;
+
+	if (dino_buf == NULL) {
         tsk_error_reset();
         tsk_error_set_errno(TSK_ERR_FS_ARG);
         tsk_error_set_errstr("ext2fs_dinode_copy: dino_buf is NULL");
@@ -602,85 +617,255 @@ ext2fs_dinode_copy(EXT2FS_INFO * ext2fs, TSK_FS_META * fs_meta,
         tsk_fs_attrlist_markunused(fs_meta->attr);
     }
 
-    // set the type
-    switch (tsk_getu16(fs->endian, dino_buf->i_mode) & EXT2_IN_FMT) {
-    case EXT2_IN_REG:
-        fs_meta->type = TSK_FS_META_TYPE_REG;
-        break;
-    case EXT2_IN_DIR:
-        fs_meta->type = TSK_FS_META_TYPE_DIR;
-        break;
-    case EXT2_IN_SOCK:
-        fs_meta->type = TSK_FS_META_TYPE_SOCK;
-        break;
-    case EXT2_IN_LNK:
-        fs_meta->type = TSK_FS_META_TYPE_LNK;
-        break;
-    case EXT2_IN_BLK:
-        fs_meta->type = TSK_FS_META_TYPE_BLK;
-        break;
-    case EXT2_IN_CHR:
-        fs_meta->type = TSK_FS_META_TYPE_CHR;
-        break;
-    case EXT2_IN_FIFO:
-        fs_meta->type = TSK_FS_META_TYPE_FIFO;
-        break;
-    default:
-        fs_meta->type = TSK_FS_META_TYPE_UNDEF;
-        break;
-    }
+	// set the type
+	switch (tsk_getu16(fs->endian, dino_buf->i_mode) & EXT2_IN_FMT) {
+		case EXT2_IN_REG:
+			fs_meta->type = TSK_FS_META_TYPE_REG;
+			break;
+		case EXT2_IN_DIR:
+			fs_meta->type = TSK_FS_META_TYPE_DIR;
+			break;
+		case EXT2_IN_SOCK:
+			fs_meta->type = TSK_FS_META_TYPE_SOCK;
+			break;
+		case EXT2_IN_LNK:
+			fs_meta->type = TSK_FS_META_TYPE_LNK;
+			break;
+		case EXT2_IN_BLK:
+			fs_meta->type = TSK_FS_META_TYPE_BLK;
+			break;
+		case EXT2_IN_CHR:
+			fs_meta->type = TSK_FS_META_TYPE_CHR;
+			break;
+		case EXT2_IN_FIFO:
+			fs_meta->type = TSK_FS_META_TYPE_FIFO;
+			break;
+		default:
+			fs_meta->type = TSK_FS_META_TYPE_UNDEF;
+			break;
+	}
 
-    // set the mode
-    fs_meta->mode = 0;
-    if (tsk_getu16(fs->endian, dino_buf->i_mode) & EXT2_IN_ISUID)
-        fs_meta->mode |= TSK_FS_META_MODE_ISUID;
-    if (tsk_getu16(fs->endian, dino_buf->i_mode) & EXT2_IN_ISGID)
-        fs_meta->mode |= TSK_FS_META_MODE_ISGID;
-    if (tsk_getu16(fs->endian, dino_buf->i_mode) & EXT2_IN_ISVTX)
-        fs_meta->mode |= TSK_FS_META_MODE_ISVTX;
+	// set the mode
+	fs_meta->mode = 0;
+	if (tsk_getu16(fs->endian, dino_buf->i_mode) & EXT2_IN_ISUID)
+		fs_meta->mode |= TSK_FS_META_MODE_ISUID;
+	if (tsk_getu16(fs->endian, dino_buf->i_mode) & EXT2_IN_ISGID)
+		fs_meta->mode |= TSK_FS_META_MODE_ISGID;
+	if (tsk_getu16(fs->endian, dino_buf->i_mode) & EXT2_IN_ISVTX)
+		fs_meta->mode |= TSK_FS_META_MODE_ISVTX;
 
-    if (tsk_getu16(fs->endian, dino_buf->i_mode) & EXT2_IN_IRUSR)
-        fs_meta->mode |= TSK_FS_META_MODE_IRUSR;
-    if (tsk_getu16(fs->endian, dino_buf->i_mode) & EXT2_IN_IWUSR)
-        fs_meta->mode |= TSK_FS_META_MODE_IWUSR;
-    if (tsk_getu16(fs->endian, dino_buf->i_mode) & EXT2_IN_IXUSR)
-        fs_meta->mode |= TSK_FS_META_MODE_IXUSR;
+	if (tsk_getu16(fs->endian, dino_buf->i_mode) & EXT2_IN_IRUSR)
+		fs_meta->mode |= TSK_FS_META_MODE_IRUSR;
+	if (tsk_getu16(fs->endian, dino_buf->i_mode) & EXT2_IN_IWUSR)
+		fs_meta->mode |= TSK_FS_META_MODE_IWUSR;
+	if (tsk_getu16(fs->endian, dino_buf->i_mode) & EXT2_IN_IXUSR)
+		fs_meta->mode |= TSK_FS_META_MODE_IXUSR;
 
-    if (tsk_getu16(fs->endian, dino_buf->i_mode) & EXT2_IN_IRGRP)
-        fs_meta->mode |= TSK_FS_META_MODE_IRGRP;
-    if (tsk_getu16(fs->endian, dino_buf->i_mode) & EXT2_IN_IWGRP)
-        fs_meta->mode |= TSK_FS_META_MODE_IWGRP;
-    if (tsk_getu16(fs->endian, dino_buf->i_mode) & EXT2_IN_IXGRP)
-        fs_meta->mode |= TSK_FS_META_MODE_IXGRP;
+	if (tsk_getu16(fs->endian, dino_buf->i_mode) & EXT2_IN_IRGRP)
+		fs_meta->mode |= TSK_FS_META_MODE_IRGRP;
+	if (tsk_getu16(fs->endian, dino_buf->i_mode) & EXT2_IN_IWGRP)
+		fs_meta->mode |= TSK_FS_META_MODE_IWGRP;
+	if (tsk_getu16(fs->endian, dino_buf->i_mode) & EXT2_IN_IXGRP)
+		fs_meta->mode |= TSK_FS_META_MODE_IXGRP;
 
-    if (tsk_getu16(fs->endian, dino_buf->i_mode) & EXT2_IN_IROTH)
-        fs_meta->mode |= TSK_FS_META_MODE_IROTH;
-    if (tsk_getu16(fs->endian, dino_buf->i_mode) & EXT2_IN_IWOTH)
-        fs_meta->mode |= TSK_FS_META_MODE_IWOTH;
-    if (tsk_getu16(fs->endian, dino_buf->i_mode) & EXT2_IN_IXOTH)
-        fs_meta->mode |= TSK_FS_META_MODE_IXOTH;
+	if (tsk_getu16(fs->endian, dino_buf->i_mode) & EXT2_IN_IROTH)
+		fs_meta->mode |= TSK_FS_META_MODE_IROTH;
+	if (tsk_getu16(fs->endian, dino_buf->i_mode) & EXT2_IN_IWOTH)
+		fs_meta->mode |= TSK_FS_META_MODE_IWOTH;
+	if (tsk_getu16(fs->endian, dino_buf->i_mode) & EXT2_IN_IXOTH)
+		fs_meta->mode |= TSK_FS_META_MODE_IXOTH;
 
-    fs_meta->nlink = tsk_getu16(fs->endian, dino_buf->i_nlink);
+	fs_meta->size = tsk_getu32(fs->endian, dino_buf->i_size);
+	fs_meta->time2.ext2.dtime = tsk_getu32(fs->endian, dino_buf->i_dtime);
+	fs_meta->ctime = tsk_getu32(fs->endian, dino_buf->i_ctime);
+	fs_meta->addr = inum;
 
-    fs_meta->size = tsk_getu32(fs->endian, dino_buf->i_size);
+	/* the general size value in the inode is only 32-bits,
+	 * but the i_dir_acl value is used for regular files to
+	 * hold the upper 32-bits
+	 *
+	 * The RO_COMPAT_LARGE_FILE flag in the super block will identify
+	 * if there are any large files in the file system
+	 */
+	if ((fs_meta->type == TSK_FS_META_TYPE_REG) &&
+		(tsk_getu32(fs->endian, sb->s_feature_ro_compat) &
+			EXT2FS_FEATURE_RO_COMPAT_LARGE_FILE)) {
+		fs_meta->size +=
+			((uint64_t)tsk_getu32(fs->endian,
+				dino_buf->i_size_high) << 32);
+	}
 
-    fs_meta->addr = inum;
+	/* Fill in the flags value */
+	grp_num = (EXT2_GRPNUM_T)((inum - fs->first_inum) /
+		tsk_getu32(fs->endian, ext2fs->fs->s_inodes_per_group));
 
-    /* the general size value in the inode is only 32-bits,
-     * but the i_dir_acl value is used for regular files to
-     * hold the upper 32-bits
-     *
-     * The RO_COMPAT_LARGE_FILE flag in the super block will identify
-     * if there are any large files in the file system
-     */
-    if ((fs_meta->type == TSK_FS_META_TYPE_REG) &&
-        (tsk_getu32(fs->endian, sb->s_feature_ro_compat) &
-            EXT2FS_FEATURE_RO_COMPAT_LARGE_FILE)) {
-        fs_meta->size +=
-            ((uint64_t) tsk_getu32(fs->endian,
-                dino_buf->i_size_high) << 32);
-    }
+	tsk_take_lock(&ext2fs->lock);
 
+	if (ext2fs_imap_load(ext2fs, grp_num)) {
+		tsk_release_lock(&ext2fs->lock);
+		return 1;
+	}
+
+	ibase =
+		grp_num * tsk_getu32(fs->endian,
+			ext2fs->fs->s_inodes_per_group) + fs->first_inum;
+
+	/*
+	 * Apply the allocated/unallocated restriction.
+	 */
+	fs_meta->flags = (isset(ext2fs->imap_buf, inum - ibase) ?
+		TSK_FS_META_FLAG_ALLOC : TSK_FS_META_FLAG_UNALLOC);
+
+	tsk_release_lock(&ext2fs->lock);
+
+	/*
+	 * Apply the used/unused restriction.
+	 */
+	fs_meta->flags |= (fs_meta->ctime ?
+		TSK_FS_META_FLAG_USED : TSK_FS_META_FLAG_UNUSED);
+
+
+	// for journal recovery
+	if (fs_meta->addr > 0x0a && (fs_meta->size == 0 || fs_meta->time2.ext2.dtime != 0)) {
+		uint32_t journ_numblk = tsk_getu32(TSK_BIG_ENDIAN, ext2fs->jinfo->fs->num_blk);
+		len = sizeof(ext2fs_journ_head);
+		if ((temp_head = (ext2fs_journ_head *)tsk_malloc(len)) == NULL) {
+			return 1;
+		}
+		
+		len = sizeof(ext2fs_journ_dentry_V2);
+		if ((tag_s = (ext2fs_journ_dentry_V2 *)tsk_malloc(len)) == NULL) {
+			return 1;
+		}
+		
+		len = ext2fs->inode_size;
+		if ((buf = (ext2fs_inode *)tsk_malloc(len)) == NULL) {
+			return 1;
+		}
+
+
+		if (tsk_getu32(TSK_BIG_ENDIAN, ext2fs->jinfo->fs->feature_incompat) & JBD2_FEAUTRE_INCOMPAT_CSUM_V3)
+			isV3 = TRUE;
+			
+		for (i = 1; i < journ_numblk; i++) {
+			bool isfind = FALSE;
+
+			journ_walk = ((ext2fs->jinfo->start_blk) * fs->block_size) + (fs->block_size * i);
+
+			len = sizeof(ext2fs_journ_head);
+			cnt = tsk_fs_read(fs, journ_walk, (char *)temp_head, len);
+			if (cnt != len) {
+				if (cnt >= 0) {
+					tsk_error_reset();
+					tsk_error_set_errno(TSK_ERR_FS_READ);
+				}
+				tsk_error_set_errstr("ext2fs_make_data_run_extent_index: Block\n");
+				return 1;
+			}
+
+			if (tsk_getu32(TSK_BIG_ENDIAN, temp_head->entry_type) == 0x04){ // superblock 
+				continue;
+			}
+			else if (tsk_getu32(TSK_BIG_ENDIAN, temp_head->entry_type) == 0x02){ // commit block
+				continue;
+			}
+			else if (tsk_getu32(TSK_BIG_ENDIAN, temp_head->entry_type) == 0x98) { // end of journal
+				continue;
+			}
+			else if (tsk_getu32(TSK_BIG_ENDIAN, temp_head->entry_type) == 0x01) { // descriptor block
+				int jPosition = 0;
+				TSK_OFF_T target_blk_number = dino_buf->block_number;
+				TSK_OFF_T target_rel_inum = dino_buf->rel_inum;
+				ssize_t times = 0;
+
+				while (TRUE) {
+					times++;
+					len = sizeof(ext2fs_journ_dentry_V2);
+					cnt = tsk_fs_read(fs, journ_walk + 0xc + jPosition, (char *)tag_s, len);
+					if (cnt != len) {
+						if (cnt >= 0) {
+							tsk_error_reset();
+							tsk_error_set_errno(TSK_ERR_FS_READ);
+						}
+						tsk_error_set_errstr("ext2fs_make_data_run_extent_index: Block");
+						return 1;
+					}
+
+					TSK_OFF_T blk_nr = tsk_getu32(TSK_BIG_ENDIAN, tag_s->fs_blk);
+
+					if (blk_nr == target_blk_number) {
+						ssize_t size = ext2fs->inode_size;
+						len = size;
+						TSK_OFF_T rd_offset = journ_walk + (fs->block_size * times) + ((target_rel_inum - 1) * ext2fs->inode_size);
+						cnt = tsk_fs_read(fs, rd_offset, (char *)buf, len);
+						if (cnt != len) {
+							if (cnt >= 0) {
+								tsk_error_reset();
+								tsk_error_set_errno(TSK_ERR_FS_READ);
+							}
+							tsk_error_set_errstr("ext2fs_make_data_run_extent_index: Block");
+							return 1;
+						}
+
+						if ((tsk_getu32(fs->endian, buf->i_dtime) == 0) && (tsk_getu32(fs->endian, buf->i_size) != 0) && 
+							((tsk_getu32(fs->endian, buf->i_block[3]) + tsk_getu32(fs->endian, buf->i_block[4]) + tsk_getu32(fs->endian, buf->i_block[5])) != 0)) {
+							fs_meta->size = tsk_getu32(fs->endian, buf->i_size);
+
+							if ((fs_meta->type == TSK_FS_META_TYPE_REG) &&
+								(tsk_getu32(fs->endian, sb->s_feature_ro_compat) &
+									EXT2FS_FEATURE_RO_COMPAT_LARGE_FILE)) {
+								fs_meta->size +=
+									((uint64_t)tsk_getu32(fs->endian,
+										dino_buf->i_size_high) << 32);
+							}
+
+							fs_meta->time2.ext2.dtime = tsk_getu32(fs->endian, buf->i_dtime);
+
+							dino_buf = buf;
+
+							isfind = TRUE;
+							break;
+						}
+						
+					}
+	
+					if (!isV3) {
+						if (tsk_getu16(TSK_BIG_ENDIAN, tag_s->flag) & EXT2_J_DENTRY_SAMEID) {
+							jPosition += 8;
+						}
+						else {
+							jPosition += 24;
+						}
+					}
+					else {
+						if (tsk_getu16(TSK_BIG_ENDIAN, tag_s->flag) & EXT2_J_DENTRY_SAMEID) {
+							jPosition += 16;
+						}
+						else {
+							jPosition += 32;
+						}
+					}
+
+					// 저널의 마지막 백업블록이면 스톱 
+					if ((tsk_getu16(TSK_BIG_ENDIAN, tag_s->flag) & EXT2_J_DENTRY_LAST1))  //final backup block.
+					{
+						break;
+					}
+
+					// 저널의 마지막을 못찾았을 때..종료
+					if ((jPosition + sizeof(ext2fs_journ_head)) > fs->block_size){
+
+						break;
+					}
+
+				}
+			}
+			if (isfind)
+				break;
+		}
+	}	
+
+	fs_meta->nlink = tsk_getu16(fs->endian, dino_buf->i_nlink);
     fs_meta->uid =
         tsk_getu16(fs->endian, dino_buf->i_uid) + (tsk_getu16(fs->endian,
             dino_buf->i_uid_high) << 16);
@@ -690,7 +875,6 @@ ext2fs_dinode_copy(EXT2FS_INFO * ext2fs, TSK_FS_META * fs_meta,
     fs_meta->mtime = tsk_getu32(fs->endian, dino_buf->i_mtime);
     fs_meta->atime = tsk_getu32(fs->endian, dino_buf->i_atime);
     fs_meta->ctime = tsk_getu32(fs->endian, dino_buf->i_ctime);
-    fs_meta->time2.ext2.dtime = tsk_getu32(fs->endian, dino_buf->i_dtime);
     if (fs->ftype == TSK_FS_TYPE_EXT4) {
         fs_meta->mtime_nano =
             tsk_getu32(fs->endian, dino_buf->i_mtime_extra) >> 2;
@@ -825,36 +1009,6 @@ ext2fs_dinode_copy(EXT2FS_INFO * ext2fs, TSK_FS_META * fs_meta,
         }
     }
 
-    /* Fill in the flags value */
-    grp_num = (EXT2_GRPNUM_T) ((inum - fs->first_inum) /
-        tsk_getu32(fs->endian, ext2fs->fs->s_inodes_per_group));
-
-
-    tsk_take_lock(&ext2fs->lock);
-
-    if (ext2fs_imap_load(ext2fs, grp_num)) {
-        tsk_release_lock(&ext2fs->lock);
-        return 1;
-    }
-
-    ibase =
-        grp_num * tsk_getu32(fs->endian,
-        ext2fs->fs->s_inodes_per_group) + fs->first_inum;
-
-    /*
-     * Apply the allocated/unallocated restriction.
-     */
-    fs_meta->flags = (isset(ext2fs->imap_buf, inum - ibase) ?
-        TSK_FS_META_FLAG_ALLOC : TSK_FS_META_FLAG_UNALLOC);
-
-    tsk_release_lock(&ext2fs->lock);
-
-
-    /*
-     * Apply the used/unused restriction.
-     */
-    fs_meta->flags |= (fs_meta->ctime ?
-        TSK_FS_META_FLAG_USED : TSK_FS_META_FLAG_UNUSED);
 
     return 0;
 }
@@ -873,6 +1027,7 @@ ext2fs_inode_lookup(TSK_FS_INFO * fs, TSK_FS_FILE * a_fs_file,
 {
     EXT2FS_INFO *ext2fs = (EXT2FS_INFO *) fs;
     ext2fs_inode *dino_buf = NULL;
+
     unsigned int size = 0;
 
     if (a_fs_file == NULL) {
@@ -899,8 +1054,9 @@ ext2fs_inode_lookup(TSK_FS_INFO * fs, TSK_FS_FILE * a_fs_file,
     }
 
     size =
-        ext2fs->inode_size >
-        sizeof(ext2fs_inode) ? ext2fs->inode_size : sizeof(ext2fs_inode);
+        (ext2fs->inode_size >
+        sizeof(ext2fs_inode) ? ext2fs->inode_size : (sizeof(ext2fs_inode)) + sizeof(TSK_OFF_T) + sizeof(TSK_INUM_T));
+
     if ((dino_buf = (ext2fs_inode *) tsk_malloc(size)) == NULL) {
         return 1;
     }
@@ -909,11 +1065,11 @@ ext2fs_inode_lookup(TSK_FS_INFO * fs, TSK_FS_FILE * a_fs_file,
         free(dino_buf);
         return 1;
     }
-
     if (ext2fs_dinode_copy(ext2fs, a_fs_file->meta, inum, dino_buf)) {
         free(dino_buf);
         return 1;
     }
+
 
     free(dino_buf);
     return 0;
@@ -937,8 +1093,10 @@ ext2fs_inode_walk(TSK_FS_INFO * fs, TSK_INUM_T start_inum,
     char *myname = "extXfs_inode_walk";
     EXT2FS_INFO *ext2fs = (EXT2FS_INFO *) fs;
     TSK_INUM_T inum;
-    TSK_INUM_T end_inum_tmp;
+	TSK_INUM_T end_inum_tmp;
     TSK_INUM_T ibase = 0;
+
+
     TSK_FS_FILE *fs_file;
     unsigned int myflags;
     ext2fs_inode *dino_buf = NULL;
@@ -1021,8 +1179,8 @@ ext2fs_inode_walk(TSK_FS_INFO * fs, TSK_INUM_T start_inum,
      * Iterate.
      */
     size =
-        ext2fs->inode_size >
-        sizeof(ext2fs_inode) ? ext2fs->inode_size : sizeof(ext2fs_inode);
+        (ext2fs->inode_size >
+        sizeof(ext2fs_inode) ? ext2fs->inode_size : sizeof(ext2fs_inode)) + sizeof(TSK_OFF_T) + sizeof(TSK_INUM_T);
     if ((dino_buf = (ext2fs_inode *) tsk_malloc(size)) == NULL) {
         return 1;
     }
@@ -1030,6 +1188,8 @@ ext2fs_inode_walk(TSK_FS_INFO * fs, TSK_INUM_T start_inum,
     for (inum = start_inum; inum <= end_inum_tmp; inum++) {
         int retval;
         EXT2_GRPNUM_T grp_num;
+
+
 
         /*
          * Be sure to use the proper group descriptor data. XXX Linux inodes
@@ -1051,6 +1211,7 @@ ext2fs_inode_walk(TSK_FS_INFO * fs, TSK_INUM_T start_inum,
             grp_num * tsk_getu32(fs->endian,
             ext2fs->fs->s_inodes_per_group) + 1;
 
+
         /*
          * Apply the allocated/unallocated restriction.
          */
@@ -1067,7 +1228,6 @@ ext2fs_inode_walk(TSK_FS_INFO * fs, TSK_INUM_T start_inum,
             free(dino_buf);
             return 1;
         }
-
 
         /*
          * Apply the used/unused restriction.
@@ -1139,6 +1299,8 @@ ext2fs_inode_walk(TSK_FS_INFO * fs, TSK_INUM_T start_inum,
     /*
      * Cleanup.
      */
+
+
     tsk_fs_file_close(fs_file);
     free(dino_buf);
 
@@ -3128,6 +3290,311 @@ ext2fs_istat(TSK_FS_INFO * fs, TSK_FS_ISTAT_FLAG_ENUM istat_flags, FILE * hFile,
 }
 
 
+
+/** \internal
+ * Get the number of extent blocks rooted at the given extent_header.
+ * The count does not include the extent header passed as a parameter.
+ *
+ * @return the number of extent blocks, or -1 on error.
+ */
+static int32_t
+ext2fs_extent_tree_index_count_journ(TSK_FS_INFO * fs_info, ext2fs_extent_header * header)
+{
+	int fs_blocksize = fs_info->block_size;
+	ext2fs_extent_idx *indices;
+	int count = 0;
+	uint8_t *buf;
+	int i;
+
+	if (tsk_getu16(fs_info->endian, header->eh_magic) != 0xF30A) {
+		tsk_error_set_errno(TSK_ERR_FS_INODE_COR);
+		tsk_error_set_errstr
+		("ext2fs_load_attrs: extent header magic valid incorrect!");
+		return -1;
+	}
+
+	if (tsk_getu16(fs_info->endian, header->eh_depth) == 0) {
+		return 0;
+	}
+
+	if ((buf = (uint8_t *)tsk_malloc(fs_blocksize)) == NULL) {
+		return -1;
+	}
+
+	indices = (ext2fs_extent_idx *)(header + 1);
+	for (i = 0; i < tsk_getu16(fs_info->endian, header->eh_entries); i++) {
+		ext2fs_extent_idx *index = &indices[i];
+		TSK_DADDR_T block =
+			(((uint32_t)tsk_getu16(fs_info->endian,
+				index->ei_leaf_hi)) << 16) | tsk_getu32(fs_info->
+					endian, index->ei_leaf_lo);
+		ssize_t cnt =
+			tsk_fs_read_block(fs_info, block, (char *)buf, fs_blocksize);
+		int ret;
+
+		if (cnt != fs_blocksize) {
+			if (cnt >= 0) {
+				tsk_error_reset();
+				tsk_error_set_errno(TSK_ERR_FS_READ);
+			}
+			tsk_error_set_errstr2("ext2fs_extent_tree_index_count: Block %"
+				PRIuDADDR, block);
+			return -1;
+		}
+
+		if ((ret =
+			ext2fs_extent_tree_index_count_journ(fs_info, (ext2fs_extent_header *)buf)) < 0) {
+			return -1;
+		}
+		count += ret;
+		count++;
+	}
+
+	free(buf);
+	return count;
+}
+
+
+
+
+uint8_t
+ext2fs_journ_open(EXT2FS_INFO * ext2fs)
+{
+	EXT2FS_JINFO *jinfo;
+	ext2fs_inode *dino_buf;
+	TSK_FS_INFO *fs_info = (TSK_FS_INFO *)& ext2fs->fs_info;
+
+	TSK_INUM_T inum = fs_info->journ_inum;
+	TSK_OFF_T jino_off;
+
+	ext2fs_extent_header *header = NULL;
+	ext2fs_extent_header *buf = NULL;
+	ext2fs_extent_header *leaf_block = NULL;
+
+	uint16_t num_entries;
+	uint16_t depth;
+
+	ext2fs_extent *extents = NULL;
+	ext2fs_extent_idx *indices = NULL;
+	ext4fs_gd * gd = NULL;
+
+	uint32_t *addr_ptr;
+	void * content_ptr;
+
+	ssize_t size = 0;
+	int i;
+	ssize_t cnt;
+	ssize_t len;
+
+
+	ext2fs->jinfo = jinfo =	(EXT2FS_JINFO *)tsk_fs_malloc(sizeof(EXT2FS_JINFO));
+	if (jinfo == NULL)
+		return 1;
+	
+	jinfo->j_inum = inum;
+	
+	len = sizeof(ext2fs_journ_sb);
+
+	if ((jinfo->fs = (ext2fs_journ_sb *)tsk_malloc(len)) == NULL) {
+		return -1;
+	}
+	
+
+	len = sizeof(ext4fs_gd);
+	if ((gd = (ext4fs_gd*)tsk_malloc(len)) == NULL) {
+		return 1;
+	}
+
+	cnt = tsk_fs_read(fs_info, fs_info->block_size, (char*)gd, len);
+	if (cnt != len) {
+		if (cnt >= 0) {
+			tsk_error_reset();
+			tsk_error_set_errno(TSK_ERR_FS_READ);
+		}
+		tsk_error_set_errstr2("ext2fs_open: superblock");
+		free(gd);
+		tsk_fs_free((TSK_FS_INFO *)ext2fs);
+		return -1;
+	}
+
+	if (tsk_getu16(fs_info->endian, ext2fs->fs->s_desc_size) > 32) {
+		jino_off = (TSK_OFF_T)ext4_getu64(fs_info->endian, gd->bg_inode_table_hi, gd->bg_inode_table_lo) * (TSK_OFF_T)fs_info->block_size + (jinfo->j_inum - 1) * (TSK_OFF_T)ext2fs->inode_size;
+	} else {
+		jino_off = tsk_getu32(fs_info->endian, gd->bg_inode_table_lo) * fs_info->block_size + (jinfo->j_inum - 1) * ext2fs->inode_size;
+	}
+
+	size = ext2fs->inode_size;
+	if ((dino_buf = (ext2fs_inode *)tsk_malloc(size)) == NULL) {
+		return 1;
+	}
+
+	len = ext2fs->inode_size;
+	cnt = tsk_fs_read(fs_info, jino_off, (char *)dino_buf, len);
+
+	if (cnt != len) {
+		if (cnt >= 0) {
+			tsk_error_reset();
+			tsk_error_set_errno(TSK_ERR_FS_READ);
+		}
+		tsk_error_set_errstr2("ext2fs_open: superblock");
+		free(dino_buf);
+		free(gd);
+		tsk_fs_free((TSK_FS_INFO *)ext2fs);
+		return -1;
+	}
+
+	if (!(tsk_getu32(fs_info->endian, dino_buf->i_flags) & EXT2_IN_EXTENTS)) {
+		free(dino_buf);
+		free(gd);
+		return 1;
+	} 
+
+	if ((content_ptr = (void *)tsk_malloc(EXT2FS_FILE_CONTENT_LEN)) == NULL) {
+		free(dino_buf);
+		free(gd);
+		return 1;
+	}
+
+	addr_ptr = (uint32_t *)content_ptr;
+	for (i = 0; i < EXT2FS_NDADDR + EXT2FS_NIADDR; i++)
+		addr_ptr[i] = tsk_gets32(fs_info->endian, dino_buf->i_block[i]);
+	
+	header = (ext2fs_extent_header *)content_ptr;
+
+	num_entries = tsk_getu16(TSK_LIT_ENDIAN, header->eh_entries);
+	depth = tsk_getu16(TSK_LIT_ENDIAN, header->eh_depth);
+	
+
+
+	if ((buf = (ext2fs_extent_header*)tsk_malloc(sizeof(ext2fs_extent_header))) == NULL) {
+		free(content_ptr);
+		free(gd);
+		free(dino_buf);
+		return 1;
+	}
+
+	if ((leaf_block = (ext2fs_extent_header*)tsk_malloc(fs_info->block_size)) == NULL) {
+		free(content_ptr);
+		free(gd);
+		free(dino_buf);
+		return 1;
+	}
+
+	while (TRUE) {
+		if (depth == 0) {       /* leaf node */
+			if (num_entries >
+				(fs_info->block_size -
+					sizeof(ext2fs_extent_header)) /
+				sizeof(ext2fs_extent)) {
+				tsk_error_set_errno(TSK_ERR_FS_INODE_COR);
+				tsk_error_set_errstr
+				("ext2fs_load_attr: Inode reports too many extents");
+				free(buf);
+				free(gd);
+				free(content_ptr);
+				free(dino_buf);
+				return 1;
+			}
+
+			extents = (ext2fs_extent *)(header + 1);
+			ext2fs_extent extent = extents[0];
+			TSK_DADDR_T child_block = (((uint32_t)tsk_getu16(fs_info->endian, 
+				extent.ee_start_hi)) << 16) | tsk_getu32(fs_info->endian, extent.ee_start_lo);
+
+			len = sizeof(ext2fs_journ_sb);
+			cnt = tsk_fs_read(fs_info, child_block * fs_info->block_size, (char*)jinfo->fs, len);
+			if (cnt != len) {
+				if (cnt >= 0) {
+					tsk_error_reset();
+					tsk_error_set_errno(TSK_ERR_FS_READ);
+				}
+				tsk_error_set_errstr2("ext2fs_open: superblock");
+				fs_info->tag = 0;
+				free(ext2fs->fs);
+				tsk_fs_free((TSK_FS_INFO *)ext2fs);
+				free(buf);
+				free(gd);
+				free(content_ptr);
+				free(dino_buf);
+				return -1;
+			}
+			
+			jinfo->bsize = tsk_getu32(TSK_BIG_ENDIAN, jinfo->fs->bsize);
+			jinfo->first_block = tsk_getu32(TSK_BIG_ENDIAN, jinfo->fs->first_blk);
+			jinfo->last_block = tsk_getu32(TSK_BIG_ENDIAN, jinfo->fs->num_blk) - 1;
+			jinfo->start_blk = child_block;
+			jinfo->start_seq = tsk_getu32(TSK_BIG_ENDIAN, jinfo->fs->start_seq);
+			
+			break;
+		}
+		else {  /* interior node */
+			int32_t extent_index_size;
+
+			if (num_entries >
+				(fs_info->block_size -
+					sizeof(ext2fs_extent_header)) /
+				sizeof(ext2fs_extent_idx)) {
+				tsk_error_set_errno(TSK_ERR_FS_INODE_COR);
+				tsk_error_set_errstr
+				("ext2fs_load_attr: Inode reports too many extent indices");
+				free(buf);
+				free(gd);
+				free(content_ptr);
+				free(dino_buf);
+				return 1;
+			}
+
+			extent_index_size =
+				ext2fs_extent_tree_index_count_journ(fs_info, header);
+			if (extent_index_size < 0) {
+				free(buf);
+				free(gd);
+				free(content_ptr);
+				free(dino_buf);
+				return 1;
+			}
+
+			indices = (ext2fs_extent_idx *)(header + 1);
+			ext2fs_extent_idx *index = &indices[0];
+			TSK_DADDR_T child_block =
+				(((uint32_t)tsk_getu16(fs_info->endian,
+					index->
+					ei_leaf_hi)) << 16) | tsk_getu32(fs_info->
+						endian, index->ei_leaf_lo);
+
+			cnt = tsk_fs_read(fs_info, child_block * fs_info->block_size, (char*)leaf_block, fs_info->block_size);
+			if (cnt != fs_info->block_size) {
+				if (cnt >= 0) {
+					tsk_error_reset();
+					tsk_error_set_errno(TSK_ERR_FS_READ);
+				}
+				tsk_error_set_errstr2("ext2fs_open: superblock");
+				free(buf);
+				free(gd);
+				free(content_ptr);
+				free(dino_buf);
+				tsk_fs_free((TSK_FS_INFO *)ext2fs);
+				return -1;
+			}
+			
+			
+			header = (ext2fs_extent_header *)leaf_block;
+			num_entries = tsk_getu16(TSK_LIT_ENDIAN, header->eh_entries);
+			depth = tsk_getu16(TSK_LIT_ENDIAN, header->eh_depth);
+
+		}
+
+	}
+
+	free(buf);
+	free(content_ptr);
+	free(gd);
+	free(dino_buf);
+
+	return 0;
+}
+
+
 /* ext2fs_close - close an ext2fs file system */
 
 static void
@@ -3360,6 +3827,8 @@ ext2fs_open(TSK_IMG_INFO * img_info, TSK_OFF_T offset,
     ext2fs->groups_offset =
         roundup((EXT2FS_SBOFF + sizeof(ext2fs_sb)), fs->block_size);
 
+
+
     // sanity check to avoid divide by zero issues
     if (tsk_getu32(fs->endian, ext2fs->fs->s_blocks_per_group) == 0) {
         fs->tag = 0;
@@ -3447,7 +3916,8 @@ ext2fs_open(TSK_IMG_INFO * img_info, TSK_OFF_T offset,
     ext2fs->grp_buf = NULL;
     ext2fs->grp_num = 0xffffffff;
 
-
+	if (ext2fs->fs->s_feature_incompat && EXT2FS_FEATURE_INCOMPAT_EXTENTS)
+		ext2fs_journ_open(ext2fs);
     /*
      * Print some stats.
      */
