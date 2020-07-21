@@ -341,6 +341,10 @@ extern "C" {
         uint8_t i_crtime[4];    /* u32 */
         uint8_t i_crtime_extra[4];      /* u32 */
         uint8_t i_version_hi[4];        /* u32 */
+		uint8_t i_projid[4];
+
+		TSK_OFF_T block_number;
+		TSK_INUM_T rel_inum;
     } ext2fs_inode;
 
     typedef struct ext2fs_extent {
@@ -540,6 +544,9 @@ extern "C" {
 #define JBD2_FEATURE_INCOMPAT_REVOKE        0x00000001
 #define JBD2_FEATURE_INCOMPAT_64BIT         0x00000002
 #define JBD2_FEATURE_INCOMPAT_ASYNC_COMMIT  0x00000004
+#define JBD2_FEAUTRE_INCOMPAT_CSUM_V2		0x00000008
+#define JBD2_FEAUTRE_INCOMPAT_CSUM_V3		0x00000010
+
 
     typedef struct {
         uint8_t magic[4];
@@ -608,18 +615,33 @@ extern "C" {
 #define EXT2_J_DENTRY_ESC	1       /* The orig block starts with magic */
 #define EXT2_J_DENTRY_SAMEID	2       /* Entry is for same id, so do not skip 16 ahead */
 #define EXT2_J_DENTRY_DEL	4       /* not currently used in src */
-#define EXT2_J_DENTRY_LAST	8       /* Last tag */
+#define EXT2_J_DENTRY_LAST1	8       /* Last tag */
+#define EXT2_J_DENTRY_LAST2	10       /* Last tag */
+
 
 /* Entry in the descriptor table */
     typedef struct {
         uint8_t fs_blk[4];
-        uint8_t flag[4];
+        uint8_t checksum[2];
+		uint8_t flag[2];
+		uint8_t fs_blk_hi[4];
     } ext2fs_journ_dentry;
 
+	typedef struct {
+		uint8_t fs_blk[4];
+		uint8_t checksum[2];
+		uint8_t flag[2];
+	} ext2fs_journ_dentry_V2;
+
+	typedef struct {
+		uint8_t fs_blk[4];
+		uint8_t flag[4];
+		uint8_t checksum[4];
+	} ext2fs_journ_dentry_V3;
 
 /* Journal Info */
     typedef struct {
-
+		ext2fs_journ_sb *fs;
         TSK_FS_FILE *fs_file;
         TSK_INUM_T j_inum;
 
