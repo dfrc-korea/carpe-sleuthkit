@@ -13,9 +13,6 @@
 #include "tsk_fs_i.h"
 #include "tsk_btrfs.h"
 
-static int files_found = 0;
-static int folders_found = 0;
-
 
 static uint8_t
 btrfs_dent_copy(BTRFS_INFO * btrfs,
@@ -24,7 +21,7 @@ btrfs_dent_copy(BTRFS_INFO * btrfs,
 	TSK_FS_INFO *fs = &(btrfs->fs_info);
 
 	/* BTRFS does not null terminate */
-	int namelen = tsk_getu16(fs->endian, dir_item->name_len);
+	uint16_t namelen = tsk_getu16(fs->endian, dir_item->name_len);
 	if (namelen >= fs_name->name_size) {
 		tsk_error_reset();
 		tsk_error_set_errno(TSK_ERR_FS_ARG);
@@ -84,7 +81,7 @@ btrfs_dent_parse_leaf(BTRFS_INFO * btrfs, TSK_FS_DIR * a_fs_dir, uint8_t a_is_de
 	TSK_FS_NAME *fs_name;
 
 	inum = a_fs_dir->addr;
-	int idx, cnt, len;
+	int idx;
 
 	if ((fs_name = tsk_fs_name_alloc(BTRFS_MAXNAMLEN + 1, 0)) == NULL)
 		return TSK_ERR;
@@ -134,11 +131,14 @@ btrfs_dent_parse_leaf(BTRFS_INFO * btrfs, TSK_FS_DIR * a_fs_dir, uint8_t a_is_de
 	return TSK_OK;
 }
 
+/*
 static TSK_RETVAL_ENUM
 btrfs_dent_parse(BTRFS_INFO * btrfs, TSK_FS_DIR * a_fs_dir, uint8_t a_is_del, TSK_LIST ** list_seen, char *buf, TSK_OFF_T offset)
 {
 	return -1;
 }
+*/
+
 
 /** \internal
 * Process a directory and load up FS_DIR with the entries. If a pointer to
@@ -158,8 +158,6 @@ btrfs_dir_open_meta(TSK_FS_INFO * a_fs, TSK_FS_DIR ** a_fs_dir,
 	TSK_INUM_T a_addr)
 {
 	BTRFS_INFO *btrfs = (BTRFS_INFO *)a_fs;
-	char *dirbuf;
-	TSK_OFF_T size;
 	TSK_FS_DIR *fs_dir;
 	TSK_LIST *list_seen = NULL;
 

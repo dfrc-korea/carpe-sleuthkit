@@ -1184,14 +1184,14 @@ btrfs_calc_phyAddr(TSK_FS_INFO * a_fs, BTRFS_INFO *btrfs, uint8_t *logical_addr,
 
 	while (true) {
 		if (target_addr < tsk_getu64(a_fs->endian, btrfs->chunk_tree[current_stripe]->items[i].key.offset)){
-			chunk_off = tsk_getu64(a_fs->endian, btrfs->chunk_tree[current_stripe]->items[i-1].offset);
+			chunk_off = tsk_getu32(a_fs->endian, btrfs->chunk_tree[current_stripe]->items[i-1].offset);
 			chunk_log_addr = tsk_getu64(a_fs->endian, btrfs->chunk_tree[current_stripe]->items[i-1].key.offset);
 			size = tsk_getu32(a_fs->endian, btrfs->chunk_tree[current_stripe]->items[i-1].size);
 			break;
 		}
 		else {
 			if ((i != 0) && (tsk_getu64(a_fs->endian, btrfs->chunk_tree[current_stripe]->items[i].key.offset) == 0)) {
-				chunk_off = tsk_getu64(a_fs->endian, btrfs->chunk_tree[current_stripe]->items[i-1].offset);
+				chunk_off = tsk_getu32(a_fs->endian, btrfs->chunk_tree[current_stripe]->items[i-1].offset);
 				chunk_log_addr = tsk_getu64(a_fs->endian, btrfs->chunk_tree[current_stripe]->items[i-1].key.offset);
 				size = tsk_getu32(a_fs->endian, btrfs->chunk_tree[current_stripe]->items[i - 1].size);
 
@@ -1244,15 +1244,16 @@ static inline uint64_t btrfs_get_last_inum(BTRFS_INFO * btrfs) {
 	TSK_FS_INFO *fs;
 
 	btrfs_leaf * fs_leaf;
-	uint64_t num_stripes;
-	int fs_leaf_num;
+	int num_stripes;
+	uint8_t fs_leaf_num;
 	int i, j, k;
-	int last_inum;
+	int last_inum = -1;
 
 	fs = &(btrfs->fs_info);
 	//	num_stripes = btrfs->num_stripes;
 	num_stripes = 1;
 	
+
 	for (i = 0; i < num_stripes; i++) {
 		fs_leaf_num = btrfs->fs_leaf_num[i];
 		for (j = 0; j < fs_leaf_num; j++) {
@@ -1303,11 +1304,10 @@ static inline TSK_RETVAL_ENUM btrfs_seek_dir_item(BTRFS_INFO * btrfs, TSK_INUM_T
 			btrfs->tmp_dir_item_info[1][cnt] = tsk_getu32(fs->endian, fs_leaf->items[i].size);
 
 			char * buf = (char *)btrfs->tmp_dir_item[cnt];
-			int cnt2 = tsk_fs_read(fs, btrfs->tmp_dir_item_info[0][cnt], buf, btrfs->tmp_dir_item_info[1][cnt]);
+			uint64_t cnt2 = tsk_fs_read(fs, btrfs->tmp_dir_item_info[0][cnt], buf, btrfs->tmp_dir_item_info[1][cnt]);
 			if (cnt2 != btrfs->tmp_dir_item_info[1][cnt]) {
 				tsk_error_set_errstr2("btrfs_seek_dir_item : read dir item");
 				fs->tag = 0;
-				free(btrfs->fs);
 				tsk_fs_free((TSK_FS_INFO *)btrfs);
 				return TSK_ERR;
 			}
@@ -1328,14 +1328,12 @@ static inline TSK_RETVAL_ENUM btrfs_seek_dir_item(BTRFS_INFO * btrfs, TSK_INUM_T
 static inline uint8_t btrfs_seek_inode_where_leaf(BTRFS_INFO * btrfs, TSK_INUM_T inum, uint8_t current_stripe) {
 	TSK_FS_INFO *fs;
 	btrfs_leaf * fs_leaf;
-	btrfs_node * fs_tree;
 
 	int i;
 	int tmp = -1;
 
 	fs = &(btrfs->fs_info);
 //	num_stripes = btrfs->num_stripes;
-	fs_tree = btrfs->fs_tree[current_stripe];
 
 	// trick to find fast
 	for (i = 0; i < btrfs->fs_leaf_num[current_stripe]; i++) {
@@ -1367,7 +1365,7 @@ static inline uint64_t btrfs_seek_fs_leaf(BTRFS_INFO * btrfs, TSK_INUM_T inum, u
 
 	btrfs_node * fs_tree;
 	btrfs_leaf * fs_leaf;
-	uint64_t num_stripes;
+	int num_stripes;
 	uint64_t target_phyAddr;
 
 	int i, j, k;
@@ -1379,41 +1377,65 @@ static inline uint64_t btrfs_seek_fs_leaf(BTRFS_INFO * btrfs, TSK_INUM_T inum, u
 	for (i = 0; i < num_stripes; i++) {
 		fs_tree = btrfs->fs_tree[i];
 
-		// trick to find fast
-		for (j = 0; j < btrfs->fs_leaf_num[i]; j++) {
-			fs_leaf = btrfs->fs_leaf[i][j];
-
-			if (tsk_getu64(fs->endian, fs_leaf->items[0].key.objectid) <= inum) {
-				if (tsk_getu64(fs->endian, fs_leaf->items[0].key.objectid) == inum) {
-					tmp = j;
+		if (fs_tree->header.level == 0) {
+			fs_leaf = btrfs->fs_leaf[i][0];
+			
+			for (k = 0; ; k++) {
+				if (tsk_getu32(fs->endian, fs_leaf->items[k].offset) == 0) {
 					break;
 				}
-				continue;
-			}
-			else {
-				tmp = j - 1;
-				break;
-			}
-		}
-		if (tmp == -1)
-			tmp = btrfs->fs_leaf_num[i] - 1;
 
-		fs_leaf = btrfs->fs_leaf[i][tmp];
+				if ((tsk_getu64(fs->endian, fs_leaf->items[k].key.objectid) == inum) && (fs_leaf->items[k].key.type == type)) {
+					if ((type == BTRFS_EXTENT_DATA_KEY) && (tsk_getu32(fs->endian, fs_leaf->items[k].size) != BTRFS_FILE_EXTENT_LEN)) {
+						return 0x01;
+					}
 
-		for (k = 0; ; k++) {
-			if (tsk_getu32(fs->endian, fs_leaf->items[k].offset) == 0) {
-				break;
-			}
-			if ((tsk_getu64(fs->endian, fs_leaf->items[k].key.objectid) == inum) && (fs_leaf->items[k].key.type == type)) {
+					target_phyAddr = btrfs_calc_phyAddr(fs, btrfs, fs_tree[i].header.bytenr, i);
+					target_phyAddr = target_phyAddr + 0x65 + tsk_getu32(fs->endian, fs_leaf->items[k].offset);
 
-				if ((type == BTRFS_EXTENT_DATA_KEY) && (tsk_getu32(fs->endian, fs_leaf->items[k].size) != BTRFS_FILE_EXTENT_LEN)) {
-					return 0x01;
+					return target_phyAddr;
 				}
-				target_phyAddr = btrfs_calc_phyAddr(fs, btrfs, fs_tree[i].ptrs[tmp].blockptr, i);
-				target_phyAddr = target_phyAddr + 0x65 + tsk_getu32(fs->endian, fs_leaf->items[k].offset);
-				
-				return target_phyAddr;
 			}
+
+		} else if (fs_tree->header.level == 1) {
+		// trick to find fast
+			for (j = 0; j < btrfs->fs_leaf_num[i]; j++) {
+				fs_leaf = btrfs->fs_leaf[i][j];
+
+				if (tsk_getu64(fs->endian, fs_leaf->items[0].key.objectid) <= inum) {
+					if (tsk_getu64(fs->endian, fs_leaf->items[0].key.objectid) == inum) {
+						tmp = j;
+						break;
+					}
+					continue;
+				}
+				else {
+					tmp = j - 1;
+					break;
+				}
+			}
+			if (tmp == -1)
+				tmp = btrfs->fs_leaf_num[i] - 1;
+
+			fs_leaf = btrfs->fs_leaf[i][tmp];
+
+			for (k = 0; ; k++) {
+				if (tsk_getu32(fs->endian, fs_leaf->items[k].offset) == 0) {
+					break;
+				}
+				if ((tsk_getu64(fs->endian, fs_leaf->items[k].key.objectid) == inum) && (fs_leaf->items[k].key.type == type)) {
+
+					if ((type == BTRFS_EXTENT_DATA_KEY) && (tsk_getu32(fs->endian, fs_leaf->items[k].size) != BTRFS_FILE_EXTENT_LEN)) {
+						return 0x01;
+					}
+					target_phyAddr = btrfs_calc_phyAddr(fs, btrfs, fs_tree[i].ptrs[tmp].blockptr, i);
+					target_phyAddr = target_phyAddr + 0x65 + tsk_getu32(fs->endian, fs_leaf->items[k].offset);
+					
+					return target_phyAddr;
+				}
+			}
+		} else {
+			// currently, we can't find this case;
 		}
 	}
 
@@ -1428,7 +1450,7 @@ static inline TSK_RETVAL_ENUM btrfs_get_fs_leaf(BTRFS_INFO *btrfs) {
 	TSK_FS_INFO *fs;
 
 	btrfs_node * fs_tree;
-	uint64_t num_stripes;
+	int num_stripes;
 	uint64_t leaf_phyAddr;
 
 	int i, j, tmp;
@@ -1439,53 +1461,81 @@ static inline TSK_RETVAL_ENUM btrfs_get_fs_leaf(BTRFS_INFO *btrfs) {
 	//	num_stripes = btrfs->num_stripes;
 	num_stripes = 1;
 
-	if ((btrfs->fs_leaf = (btrfs_leaf ***)tsk_fs_malloc(sizeof(btrfs_leaf **)*num_stripes)) == NULL)
+	if ((btrfs->fs_leaf = (btrfs_leaf ***)tsk_fs_malloc(sizeof(btrfs_leaf **)*num_stripes)) == NULL){
+		printf("malloc err\n");
 		return TSK_ERR;
-	if ((btrfs->fs_leaf_num = (uint8_t *)tsk_fs_malloc(sizeof(uint8_t)*num_stripes)) == NULL)
+	}
+
+	if ((btrfs->fs_leaf_num = (uint8_t *)tsk_fs_malloc(sizeof(uint8_t)*num_stripes)) == NULL) {
+		printf("malloc err\n");
 		return TSK_ERR;
-	if ((btrfs->fs_leaf_phy_addr = (uint64_t **)tsk_fs_malloc(sizeof(uint64_t *)*num_stripes)) == NULL)
+	}
+
+	if ((btrfs->fs_leaf_phy_addr = (uint64_t **)tsk_fs_malloc(sizeof(uint64_t *)*num_stripes)) == NULL) {
+		printf("malloc err\n");
 		return TSK_ERR;
+	}
 
 	for (i = 0; i < num_stripes; i++) {
 		fs_tree = btrfs->fs_tree[i];
 
-		for (j = 0; ; j++) {
-			if (tsk_getu64(fs->endian, fs_tree->ptrs[j].blockptr) == 0)
-				break;
-		}
-		tmp = j;
-		btrfs->fs_leaf_num[i] = tmp;
-		if ((btrfs->fs_leaf[i] = (btrfs_leaf **)tsk_fs_malloc(sizeof(btrfs_leaf *)*j)) == NULL)
-			return TSK_ERR;
-		if ((btrfs->fs_leaf_phy_addr[i] = (uint64_t *)tsk_fs_malloc(sizeof(uint64_t)*j)) == NULL)
-			return TSK_ERR;
-
-		for (j = 0; j < tmp; j++) {
-
-			if (tsk_getu64(fs->endian, fs_tree->ptrs[j].blockptr) == 0) {
-				break;
-			}
-			len = 0x4000;
-			if ((btrfs->fs_leaf[i][j] = (btrfs_leaf *)tsk_fs_malloc(len)) == NULL)
+		if (fs_tree->header.level == 0) {
+			btrfs->fs_leaf_num[i] = 1;
+			
+			if ((btrfs->fs_leaf[i] = (btrfs_leaf **)tsk_fs_malloc(sizeof(btrfs_leaf *)*btrfs->fs_leaf_num[i])) == NULL) {
+				printf("malloc err\n");
 				return TSK_ERR;
+			}
+			if ((btrfs->fs_leaf_phy_addr[i] = (uint64_t *)tsk_fs_malloc(sizeof(uint64_t)*btrfs->fs_leaf_num[i])) == NULL) {
+				printf("malloc err\n");
+				return TSK_ERR;
+			}
+			btrfs->fs_leaf[i][0] = (btrfs_leaf*) fs_tree;
+			btrfs->fs_leaf_phy_addr[i][0] = btrfs->fs_phy_addr[i];
+		} else if (fs_tree->header.level == 1){
+			for (j = 0; ; j++) {
+				if (tsk_getu64(fs->endian, fs_tree->ptrs[j].blockptr) == 0)
+					break;
+			}
+			tmp = j;
+			btrfs->fs_leaf_num[i] = tmp;
+			if ((btrfs->fs_leaf[i] = (btrfs_leaf **)tsk_fs_malloc(sizeof(btrfs_leaf *)*btrfs->fs_leaf_num[i])) == NULL) {
+				printf("malloc err\n");
+				return TSK_ERR;
+			}
+			if ((btrfs->fs_leaf_phy_addr[i] = (uint64_t *)tsk_fs_malloc(sizeof(uint64_t)*btrfs->fs_leaf_num[i])) == NULL) {
+				printf("malloc err\n");
+				return TSK_ERR;
+			}
 
-			leaf_phyAddr = btrfs_calc_phyAddr(fs, btrfs, fs_tree->ptrs[j].blockptr, i);
-
-			btrfs->fs_leaf_phy_addr[i][j] = leaf_phyAddr;
-			len = 0x4000;
-			cnt = tsk_fs_read(fs, leaf_phyAddr, (char *)btrfs->fs_leaf[i][j], len);
-			if (cnt != len) {
-				if (cnt >= 0) {
-					tsk_error_reset();
-					tsk_error_set_errno(TSK_ERR_FS_READ);
+			for (j = 0; j < tmp; j++) {
+				if (tsk_getu64(fs->endian, fs_tree->ptrs[j].blockptr) == 0) {
+					break;
 				}
-				tsk_error_set_errstr2("btrfs_get_fs_leaf : read fs_leaf");
-				fs->tag = 0;
-				free(btrfs->fs);
-				free(btrfs->fs_leaf);
-				tsk_fs_free((TSK_FS_INFO *)btrfs);
-				return TSK_ERR;
+				len = 0x4000;
+				if ((btrfs->fs_leaf[i][j] = (btrfs_leaf *)tsk_fs_malloc(len)) == NULL) {
+					printf("malloc err\n");
+					return TSK_ERR;
+				}
+
+				leaf_phyAddr = btrfs_calc_phyAddr(fs, btrfs, fs_tree->ptrs[j].blockptr, i);
+
+				btrfs->fs_leaf_phy_addr[i][j] = leaf_phyAddr;
+				len = 0x4000;
+				cnt = tsk_fs_read(fs, leaf_phyAddr, (char *)btrfs->fs_leaf[i][j], len);
+				if (cnt != len) {
+					if (cnt >= 0) {
+						tsk_error_reset();
+						tsk_error_set_errno(TSK_ERR_FS_READ);
+					}
+					tsk_error_set_errstr2("btrfs_get_fs_leaf : read fs_leaf");
+					fs->tag = 0;
+					tsk_fs_free((TSK_FS_INFO *)btrfs);
+					return TSK_ERR;
+				}
 			}
+		} else {
+			// currently, we can't find this case;
 		}
 
 	}
@@ -1497,8 +1547,8 @@ static inline TSK_RETVAL_ENUM btrfs_get_fs_leaf(BTRFS_INFO *btrfs) {
 
 static inline TSK_RETVAL_ENUM btrfs_init_fs(BTRFS_INFO *btrfs) {
 	uint64_t fs_phyAddr;
-	uint64_t num_stripes;
-	uint64_t num_rootitem;
+	int num_stripes;
+	int num_rootitem;
 
 	btrfs_leaf * root_tree;
 	btrfs_root_item *root_item;
@@ -1523,14 +1573,14 @@ static inline TSK_RETVAL_ENUM btrfs_init_fs(BTRFS_INFO *btrfs) {
 		num_rootitem = (tsk_getu32(fs->endian, btrfs->fs->nodesize) - 0x65) / 0x21;
 
 		for (j = 0; j < num_rootitem; j++) {
-			if (tsk_getu64(fs->endian, root_tree->items[j].offset) == 0)
+			if (tsk_getu32(fs->endian, root_tree->items[j].offset) == 0)
 				break;
 
 			objid = tsk_getu64(fs->endian, root_tree->items[j].key.objectid);
 
 			if ((objid == 0x05 || objid >= 0x100) && (root_tree->items[j].key.type == 0x84)) {
 				len = tsk_getu32(fs->endian, root_tree->items[j].size);
-				root_data_off = btrfs->root_phy_addr[i] + 0x65 + tsk_getu64(fs->endian, root_tree->items[j].offset);
+				root_data_off = btrfs->root_phy_addr[i] + 0x65 + tsk_getu32(fs->endian, root_tree->items[j].offset);
 				cnt = tsk_fs_read(fs, root_data_off, (char *)root_item, len);
 				if (cnt != len) {
 					if (cnt >= 0) {
@@ -1539,12 +1589,10 @@ static inline TSK_RETVAL_ENUM btrfs_init_fs(BTRFS_INFO *btrfs) {
 					}
 					tsk_error_set_errstr2("btrfs_init_fs : read root");
 					fs->tag = 0;
-					free(btrfs->fs);
 					free(root_item);
 					tsk_fs_free((TSK_FS_INFO *)btrfs);
 					return TSK_ERR;
 				}
-
 				if ((btrfs->fs_phy_addr = (uint64_t *)tsk_fs_malloc(sizeof(btrfs->fs_phy_addr))) == NULL)
 					return TSK_ERR;
 
@@ -1564,7 +1612,6 @@ static inline TSK_RETVAL_ENUM btrfs_init_fs(BTRFS_INFO *btrfs) {
 					}
 					tsk_error_set_errstr2("btrfs_init_fs : read root");
 					fs->tag = 0;
-					free(btrfs->fs);
 					free(root_item);
 					tsk_fs_free((TSK_FS_INFO *)btrfs);
 					return TSK_ERR;
@@ -1582,11 +1629,11 @@ static inline TSK_RETVAL_ENUM btrfs_init_fs(BTRFS_INFO *btrfs) {
 
 static inline TSK_RETVAL_ENUM btrfs_init_root(BTRFS_INFO *btrfs) {
 	uint64_t root_phyAddr;
-	uint64_t num_stripes;
+	int num_stripes;
 	TSK_FS_INFO *fs;
 	int i;
 	int cnt;
-	uint32_t len;
+	int len;
 
 	fs = &(btrfs->fs_info);
 
@@ -1615,7 +1662,6 @@ static inline TSK_RETVAL_ENUM btrfs_init_root(BTRFS_INFO *btrfs) {
 			}
 			tsk_error_set_errstr2("btrfs_init_root : read root");
 			fs->tag = 0;
-			free(btrfs->fs);
 			tsk_fs_free((TSK_FS_INFO *)btrfs);
 			return TSK_ERR;
 		}
@@ -1652,7 +1698,6 @@ static inline TSK_RETVAL_ENUM btrfs_init_chunk(BTRFS_INFO *btrfs) {
 		}
 		tsk_error_set_errstr2("btrfs_init_chunk : read sys_chunk");
 		fs->tag = 0;
-		free(btrfs->fs);
 		tsk_fs_free((TSK_FS_INFO *)btrfs);
 		return TSK_ERR;
 	}
@@ -1666,7 +1711,6 @@ static inline TSK_RETVAL_ENUM btrfs_init_chunk(BTRFS_INFO *btrfs) {
 		}
 		tsk_error_set_errstr2("btrfs_init_chunk : read sys_chunk");
 		fs->tag = 0;
-		free(btrfs->fs);
 		tsk_fs_free((TSK_FS_INFO *)btrfs);
 		return TSK_ERR;
 	}
@@ -1696,7 +1740,6 @@ static inline TSK_RETVAL_ENUM btrfs_init_chunk(BTRFS_INFO *btrfs) {
 			}
 			tsk_error_set_errstr2("btrfs_init_chunk : read sys_chunk");
 			fs->tag = 0;
-			free(btrfs->fs);
 			tsk_fs_free((TSK_FS_INFO *)btrfs);
 			free(sys_chunk_key);
 			free(sys_chunk);
@@ -1710,7 +1753,7 @@ static inline TSK_RETVAL_ENUM btrfs_init_chunk(BTRFS_INFO *btrfs) {
 
 		btrfs->chunk_phy_addr[i] = target_phyAddr;
 		len = tsk_getu32(fs->endian, btrfs->fs->nodesize);
-		if ((btrfs->chunk_tree[i] = (btrfs_leaf *)tsk_fs_malloc(len)) == NULL)
+		if ((btrfs->chunk_tree[i] = (btrfs_leaf *)tsk_fs_malloc(sizeof(btrfs_leaf) * len)) == NULL)
 			return TSK_ERR;
 
 		cnt = tsk_fs_read(fs, target_phyAddr, (char *)btrfs->chunk_tree[i], len);
@@ -1722,7 +1765,6 @@ static inline TSK_RETVAL_ENUM btrfs_init_chunk(BTRFS_INFO *btrfs) {
 
 			tsk_error_set_errstr2("btrfs_init_chunk : read chunk_tree");
 			fs->tag = 0;
-			free(btrfs->fs);
 			tsk_fs_free((TSK_FS_INFO *)btrfs);
 			free(sys_chunk_key);
 			free(sys_chunk);
@@ -1740,7 +1782,6 @@ static inline TSK_RETVAL_ENUM btrfs_init_chunk(BTRFS_INFO *btrfs) {
 
 			tsk_error_set_errstr2("btrfs_init_chunk : read chunk_tree");
 			fs->tag = 0;
-			free(btrfs->fs);
 			tsk_fs_free((TSK_FS_INFO *)btrfs);
 			free(sys_chunk_key);
 			free(sys_chunk);

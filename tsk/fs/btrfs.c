@@ -43,11 +43,12 @@ btrfs_dinode_load(BTRFS_INFO * btrfs, TSK_INUM_T dino_inum,
 		tsk_error_set_errstr("ext2fs_dinode_load: dino_buf is NULL");
 		return 1;
 	}
-
+	
 	addr = btrfs_seek_fs_leaf(btrfs, dino_inum, BTRFS_INODE_ITEM_KEY);
 
-	cnt = tsk_fs_read(fs, addr, (char *)dino_buf, btrfs->inode_size);
-	if (cnt != btrfs->inode_size) {
+	cnt = tsk_fs_read(fs, addr, (char *)dino_buf, (size_t)btrfs->inode_size);
+	ssize_t len = btrfs->inode_size;
+	if (cnt != len) {
 		if (cnt >= 0) {
 			tsk_error_reset();
 			tsk_error_set_errno(TSK_ERR_FS_READ);
@@ -56,7 +57,6 @@ btrfs_dinode_load(BTRFS_INFO * btrfs, TSK_INUM_T dino_inum,
 			" from %" PRIuOFF, dino_inum, addr);
 		return 1;
 	}
-
 	return 0;
 }
 
@@ -166,7 +166,7 @@ btrfs_dinode_copy(BTRFS_INFO * btrfs, TSK_FS_META * fs_meta,
 
 	if (fs_meta->type == TSK_FS_META_TYPE_DIR) {
 		btrfs_leaf * fs_leaf;
-		uint64_t num_stripes;
+		int num_stripes;
 
 		int i, j;
 		int tmp = -1;
@@ -302,9 +302,7 @@ btrfs_inode_walk(TSK_FS_INFO * fs, TSK_INUM_T start_inum,
 	TSK_INUM_T end_inum, TSK_FS_META_FLAG_ENUM flags,
 	TSK_FS_META_WALK_CB a_action, void *a_ptr)
 {
-	TSK_INUM_T end_inum_tmp;
 	char *myname = "btrfs_inode_walk";
-	TSK_INUM_T inum;
 	TSK_FS_FILE *fs_file;
 	btrfs_inode_item *dino_buf = NULL;
 
@@ -376,13 +374,6 @@ btrfs_inode_walk(TSK_FS_INFO * fs, TSK_INUM_T start_inum,
 	if ((fs_file = tsk_fs_file_alloc(fs)) == NULL)
 		return 1;
 	
-
-	// we need to handle fs->last_inum specially because it is for the
-	// virtual ORPHANS directory.  Handle it outside of the loop.
-	if (end_inum == TSK_FS_ORPHANDIR_INUM(fs))
-		end_inum_tmp = end_inum - 1;
-	else
-		end_inum_tmp = end_inum;
 
 	/*
 	 * Cleanup.
@@ -517,6 +508,8 @@ btrfs_load_attrs(TSK_FS_FILE * fs_file)
 	else {
 		fprintf(stderr, "content_type = unknown content type\n");
 	}
+
+	return 0;
 }
 
 
@@ -778,9 +771,8 @@ btrfs_open(TSK_IMG_INFO * img_info, TSK_OFF_T offset,
 
 	// initializing root leaf
 	btrfs_get_fs_leaf(btrfs);
-
 	fs->last_inum = btrfs_get_last_inum(btrfs);
-
+	
 	if ((fs->block_size == 0) || (fs->block_size % 512)) {
 		fs->tag = 0;
 		free(btrfs->fs);
