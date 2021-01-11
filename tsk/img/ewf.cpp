@@ -55,13 +55,13 @@ ewf_image_read(TSK_IMG_INFO * img_info, TSK_OFF_T offset, char *buf,
 
     if (tsk_verbose)
         tsk_fprintf(stderr,
-            "ewf_image_read: byte offset: %" PRIuOFF " len: %" PRIuSIZE
+            "ewf_image_read: byte offset: %" PRIdOFF " len: %" PRIuSIZE
             "\n", offset, len);
 
     if (offset > img_info->size) {
         tsk_error_reset();
         tsk_error_set_errno(TSK_ERR_IMG_READ_OFF);
-        tsk_error_set_errstr("ewf_image_read - %" PRIuOFF, offset);
+        tsk_error_set_errstr("ewf_image_read - %" PRIdOFF, offset);
         return -1;
     }
 
@@ -78,7 +78,8 @@ ewf_image_read(TSK_IMG_INFO * img_info, TSK_OFF_T offset, char *buf,
         else
             errmsg = error_string;
 
-        tsk_error_set_errstr("ewf_image_read - offset: %" PRIuOFF
+        libewf_error_free(&ewf_error);
+        tsk_error_set_errstr("ewf_image_read - offset: %" PRIdOFF
             " - len: %" PRIuSIZE " - %s", offset, len, errmsg);
         tsk_release_lock(&(ewf_info->read_lock));
         return -1;
@@ -88,7 +89,7 @@ ewf_image_read(TSK_IMG_INFO * img_info, TSK_OFF_T offset, char *buf,
     if (cnt < 0) {
         tsk_error_reset();
         tsk_error_set_errno(TSK_ERR_IMG_READ);
-        tsk_error_set_errstr("ewf_image_read - offset: %" PRIuOFF
+        tsk_error_set_errstr("ewf_image_read - offset: %" PRIdOFF
             " - len: %" PRIuSIZE " - %s", offset, len, strerror(errno));
         tsk_release_lock(&(ewf_info->read_lock));
         return -1;
@@ -107,7 +108,7 @@ ewf_image_imgstat(TSK_IMG_INFO * img_info, FILE * hFile)
     tsk_fprintf(hFile, "IMAGE FILE INFORMATION\n");
     tsk_fprintf(hFile, "--------------------------------------------\n");
     tsk_fprintf(hFile, "Image Type:\t\tewf\n");
-    tsk_fprintf(hFile, "\nSize of data in bytes:\t%" PRIuOFF "\n",
+    tsk_fprintf(hFile, "\nSize of data in bytes:\t%" PRIdOFF "\n",
         img_info->size);
     tsk_fprintf(hFile, "Sector size:\t%d\n", img_info->sector_size);
 
@@ -141,11 +142,10 @@ ewf_image_close(TSK_IMG_INFO * img_info)
         free(ewf_info->img_info.images);
     }
     else {
-        libewf_error_t *error;
 #ifdef TSK_WIN32
-        libewf_glob_wide_free( ewf_info->img_info.images, ewf_info->img_info.num_img, &error);
+        libewf_glob_wide_free( ewf_info->img_info.images, ewf_info->img_info.num_img, NULL);
 #else
-        libewf_glob_free( ewf_info->img_info.images, ewf_info->img_info.num_img, &error);
+        libewf_glob_free( ewf_info->img_info.images, ewf_info->img_info.num_img, NULL);
 #endif
     }
 
@@ -168,10 +168,10 @@ img_file_header_signature_ncmp(const char *filename,
     int fd;
 
     if ((filename == NULL) || (file_header_signature == NULL)) {
-        return (0);
+        return 0;
     }
     if (size_of_signature <= 0) {
-        return (0);
+        return 0;
     }
 
     if ((fd = open(filename, O_RDONLY | O_BINARY)) < 0) {
@@ -192,7 +192,7 @@ img_file_header_signature_ncmp(const char *filename,
 
     match = strncmp(file_header_signature, header, size_of_signature) == 0;
 
-    return (match);
+    return match;
 }
 #endif
 
@@ -409,10 +409,10 @@ ewf_open(int a_num_img,
     }
     ewf_info->md5hash_isset = result;
 
-    int sha1_result = libewf_handle_get_utf8_hash_value_sha1(ewf_info->handle,
+    result = libewf_handle_get_utf8_hash_value_sha1(ewf_info->handle,
         (uint8_t *)ewf_info->sha1hash, 41, &ewf_error);
 
-    if (sha1_result == -1) {
+    if (result == -1) {
         tsk_error_reset();
         tsk_error_set_errno(TSK_ERR_IMG_OPEN);
 
@@ -427,7 +427,7 @@ ewf_open(int a_num_img,
         if (tsk_verbose != 0) {
             tsk_fprintf(stderr, "Error getting SHA1 of EWF file\n");
         }
-        return (NULL);
+        return NULL;
     }
     ewf_info->sha1hash_isset = result;
 
@@ -533,7 +533,7 @@ ewf_open(int a_num_img,
         uint32_t bytes_per_sector = 512;
         // see if the size is stored in the E01 file
         if (-1 == libewf_handle_get_bytes_per_sector(ewf_info->handle,
-            &bytes_per_sector, &ewf_error)) {
+            &bytes_per_sector, NULL)) {
             if (tsk_verbose)
                 tsk_fprintf(stderr,
                     "ewf_image_read: error getting sector size from E01\n");
@@ -593,11 +593,10 @@ static char* read_libewf_header_value(libewf_handle_t *handle, char* result_buff
     result_buffer[0] = '\0';
     size_t identifier_length = strlen((char *)identifier);
     strcpy(result_buffer, key);
-    libewf_error_t * ewf_error;
     size_t key_len = strlen(key);
 
     //buffer_size - key_len - 1 for the new line at the end
-    int result = libewf_handle_get_utf8_header_value(handle, identifier, identifier_length, (uint8_t *)(result_buffer + key_len), buffer_size - key_len - 1, &ewf_error);
+    int result = libewf_handle_get_utf8_header_value(handle, identifier, identifier_length, (uint8_t *)(result_buffer + key_len), buffer_size - key_len - 1, NULL);
     if (result != -1 && !is_blank(result_buffer + key_len)) {
         strcat(result_buffer, "\n");
     }

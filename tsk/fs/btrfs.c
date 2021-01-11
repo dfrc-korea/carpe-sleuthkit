@@ -29,7 +29,7 @@ btrfs_dinode_load(BTRFS_INFO * btrfs, TSK_INUM_T dino_inum,
 	 * Sanity check.
 	 * Use last_num-1 to account for virtual Orphan directory in last_inum.
 	 */
-	if ((dino_inum < fs->first_inum) || (dino_inum > fs->last_inum - 1)) {
+	if ((dino_inum < fs->first_inum) || (dino_inum > fs->last_inum)) {
 		tsk_error_reset();
 		tsk_error_set_errno(TSK_ERR_FS_INODE_NUM);
 		tsk_error_set_errstr("ext2fs_dinode_load: address: %" PRIuINUM,
@@ -44,10 +44,11 @@ btrfs_dinode_load(BTRFS_INFO * btrfs, TSK_INUM_T dino_inum,
 		return 1;
 	}
 	
+
 	addr = btrfs_seek_fs_leaf(btrfs, dino_inum, BTRFS_INODE_ITEM_KEY);
 
 	cnt = tsk_fs_read(fs, addr, (char *)dino_buf, (size_t)btrfs->inode_size);
-	ssize_t len = btrfs->inode_size;
+	uint64_t len = btrfs->inode_size;
 	if (cnt != len) {
 		if (cnt >= 0) {
 			tsk_error_reset();
@@ -57,20 +58,130 @@ btrfs_dinode_load(BTRFS_INFO * btrfs, TSK_INUM_T dino_inum,
 			" from %" PRIuOFF, dino_inum, addr);
 		return 1;
 	}
+	
 	return 0;
 }
 
 
+
+
+/**
+ * \internal
+ * Loads attribute for BTRFS Extents-based storage method.
+ * @param fs_file File system to analyze
+ * @returns 0 on success, 1 otherwise
+ */
 static uint8_t
-btrfs_dinode_copy(BTRFS_INFO * btrfs, TSK_FS_META * fs_meta,
+btrfs_load_attrs_inline(BTRFS_INFO * btrfs, TSK_FS_FILE *fs_file, TSK_OFF_T data_ptr, uint64_t data_size)
+{
+	TSK_FS_META *fs_meta = fs_file->meta;
+	TSK_FS_ATTR *fs_attr;
+	TSK_FS_INFO *fs = &(btrfs->fs_info);
+
+	// see if we have already loaded the attr
+	if ((fs_meta->attr != NULL)
+		&& (fs_meta->attr_state == TSK_FS_META_ATTR_STUDIED)) {
+		return 0;
+	}
+
+	if (fs_meta->attr_state == TSK_FS_META_ATTR_ERROR) {
+		return 1;
+	}
+		
+	// First load the data from the extended attr (if present)
+	uint8_t resident_data_start_offset = 0x15;
+	bool bIsonres = false;
+	uint8_t *resident_data;
+	uint8_t *inline_data;
+	int len;
+
+	bIsonres = fs_meta->size > BTRFS_FILE_EXTENT_LEN ? false : true;
+
+	if ((resident_data = (uint8_t*)tsk_malloc(fs_meta->size)) == NULL) {
+		return 1;
+	}
+
+	memset(resident_data, 0, fs_meta->size);
+
+
+	if (bIsonres) {
+		len = data_size - resident_data_start_offset;
+		memcpy(resident_data, (char*)(btrfs->tmp_extent_item) + resident_data_start_offset, len);
+	}
+	else { 
+		len = fs_meta->size - BTRFS_FILE_EXTENT_LEN + resident_data_start_offset;
+		if ((inline_data = (uint8_t*)tsk_malloc(len)) == NULL) {
+			return 1;
+		}
+		memset(inline_data, 0, len);
+
+		int cnt = tsk_fs_read(fs, data_ptr + BTRFS_FILE_EXTENT_LEN, (char *)inline_data, len);
+		if (cnt != len) {
+			if (cnt >= 0) {
+				tsk_error_reset();
+				tsk_error_set_errno(TSK_ERR_FS_READ);
+			}
+			if (!bIsonres)
+				free(inline_data);
+			free(resident_data);
+			return 1;
+		}
+
+		memcpy(resident_data, (char*)(btrfs->tmp_extent_item) + resident_data_start_offset, BTRFS_FILE_EXTENT_LEN - resident_data_start_offset);
+		memcpy(resident_data + BTRFS_FILE_EXTENT_LEN - resident_data_start_offset, inline_data, len);
+	}
+
+	fs_meta->attr = tsk_fs_attrlist_alloc();
+	if ((fs_attr =
+		tsk_fs_attrlist_getnew(fs_meta->attr,
+			TSK_FS_ATTR_RES)) == NULL) {
+		free(resident_data);
+
+		if(!bIsonres)
+			free(inline_data);
+
+		return 1;
+	}
+
+	// Set the details in the fs_attr structure
+	if (tsk_fs_attr_set_str(fs_file, fs_attr, "DATA",
+		TSK_FS_ATTR_TYPE_DEFAULT, TSK_FS_ATTR_ID_DEFAULT,
+		(void*)resident_data,
+		fs_meta->size)) {
+		free(resident_data);
+
+		if (!bIsonres)
+			free(inline_data);
+
+		fs_meta->attr_state = TSK_FS_META_ATTR_ERROR;
+		return 1;
+	}
+
+	free(resident_data);
+
+	if (!bIsonres)
+		free(inline_data);
+
+	fs_meta->attr_state = TSK_FS_META_ATTR_STUDIED;
+
+	return 0;
+}
+
+
+
+
+
+
+static uint8_t
+btrfs_dinode_copy(BTRFS_INFO * btrfs, TSK_FS_FILE * fs_file, 
 	TSK_INUM_T inum, const btrfs_inode_item * dino_buf)
 {
 	TSK_FS_INFO *fs = (TSK_FS_INFO *)& btrfs->fs_info;
+	TSK_FS_META * fs_meta = fs_file->meta;
 	TSK_OFF_T extent_item_offset;
 	int cnt;
 	
 	uint64_t * addr_ptr = (uint64_t *)fs_meta->content_ptr;
-
 	if (dino_buf == NULL) {
 		tsk_error_reset();
 		tsk_error_set_errno(TSK_ERR_FS_ARG);
@@ -164,6 +275,21 @@ btrfs_dinode_copy(BTRFS_INFO * btrfs, TSK_FS_META * fs_meta,
 		fs_meta->link = NULL;
 	}
 
+	/*
+ * Apply the allocated/unallocated restriction.
+ */
+	if (fs_meta->size == 0)
+		fs_meta->flags = TSK_FS_META_FLAG_UNALLOC;
+	else 
+		fs_meta->flags = TSK_FS_META_FLAG_ALLOC;
+
+	/*
+	 * Apply the used/unused restriction.
+	 */
+	fs_meta->flags |= (fs_meta->ctime ?
+		TSK_FS_META_FLAG_USED : TSK_FS_META_FLAG_UNUSED);
+
+
 	if (fs_meta->type == TSK_FS_META_TYPE_DIR) {
 		btrfs_leaf * fs_leaf;
 		int num_stripes;
@@ -176,8 +302,8 @@ btrfs_dinode_copy(BTRFS_INFO * btrfs, TSK_FS_META * fs_meta,
 
 		for (i = 0; i < num_stripes; i++) {
 			// trick to find fast
-			for (j = 0; j < btrfs->fs_leaf_num[i]; j++) {
-				fs_leaf = btrfs->fs_leaf[i][j];
+			for (j = 0; j < btrfs->fs_leaf_num; j++) {
+				fs_leaf = btrfs->fs_leaf[j];
 				if (tsk_getu64(fs->endian, fs_leaf->items[0].key.objectid) <= inum) {
 					if (tsk_getu64(fs->endian, fs_leaf->items[0].key.objectid) == inum) {
 						tmp = j;
@@ -191,35 +317,53 @@ btrfs_dinode_copy(BTRFS_INFO * btrfs, TSK_FS_META * fs_meta,
 				}
 			}
 			if (tmp == -1)
-				tmp = btrfs->fs_leaf_num[i] - 1;
+				tmp = btrfs->fs_leaf_num - 1;
 		}
+		addr_ptr[0] = btrfs->fs_leaf_phy_addr[tmp];
 
-		addr_ptr[0] = btrfs->fs_leaf_phy_addr[i - 1][tmp];
+		fs_meta->content_type = TSK_FS_META_CONTENT_TYPE_DEFAULT;
 	}
 	else {
 		// calc extent item offset
 		extent_item_offset = btrfs_seek_fs_leaf(btrfs, inum, BTRFS_EXTENT_DATA_KEY);
 
-
-		
 		// read extent item
 		if (extent_item_offset != 0x01) {
+			int extent_item_size = btrfs_seek_fs_leaf_size(btrfs, inum, BTRFS_EXTENT_DATA_KEY);
+			
+			memset(btrfs->tmp_extent_item, 0, extent_item_size);
+			
+
 			char * buf = (char *)btrfs->tmp_extent_item;
-			cnt = tsk_fs_read(fs, extent_item_offset, (char *)buf, BTRFS_FILE_EXTENT_LEN);
+			cnt = tsk_fs_read(fs, extent_item_offset, (char *)buf, extent_item_size);
 			if (cnt != BTRFS_FILE_EXTENT_LEN) {
 				if (tsk_verbose) {
 					fprintf(stderr, "invalid extent item read size, cnt: %d\n", cnt);
 				}
 				return -1;
 			}
-			addr_ptr[0] = btrfs_calc_phyAddr(fs, btrfs, btrfs->tmp_extent_item->disk_bytenr, 0);
+
+			if (btrfs->tmp_extent_item->type == 0) { // inline
+				addr_ptr[0] = extent_item_offset;
+				fs_meta->content_type = TSK_FS_META_CONTENT_TYPE_BTRFS_INLINE;
+
+				btrfs_load_attrs_inline(btrfs, fs_file, addr_ptr[0], extent_item_size);
+
+			} else if (btrfs->tmp_extent_item->type == 1){ // regular
+				addr_ptr[0] = btrfs_calc_phyAddr(fs, btrfs, btrfs->tmp_extent_item->disk_bytenr, 0);
+				fs_meta->content_type = TSK_FS_META_CONTENT_TYPE_BTRFS_EXTENTS;
+
+			} else {
+				printf("developing\n");
+				// prealloc
+			}
 		} else {
 			fs_meta->size = 0x00;
 			addr_ptr[0] = 0x01;
+			fs_meta->content_type = TSK_FS_META_CONTENT_TYPE_DEFAULT;
 		}
 
 	}
-	fs_meta->content_type = TSK_FS_META_CONTENT_TYPE_DEFAULT;
 
 	return 0;
 }
@@ -238,7 +382,7 @@ btrfs_inode_lookup(TSK_FS_INFO * fs, TSK_FS_FILE * a_fs_file,
 {
 	BTRFS_INFO *btrfs = (BTRFS_INFO *)fs;
 	btrfs_inode_item *dino_buf = NULL;
-	unsigned int size = 0;
+	uint64_t size = 0;
 
 	if (a_fs_file == NULL) {
 		tsk_error_set_errno(TSK_ERR_FS_ARG);
@@ -268,16 +412,17 @@ btrfs_inode_lookup(TSK_FS_INFO * fs, TSK_FS_FILE * a_fs_file,
 		btrfs->inode_size >
 		sizeof(btrfs_inode_item) ? btrfs->inode_size : sizeof(btrfs_inode_item);
 
+
 	if ((dino_buf = (btrfs_inode_item *)tsk_malloc(size)) == NULL) {
 		return 1;
 	}
+
 
 	if (btrfs_dinode_load(btrfs, inum, dino_buf)) {
 		free(dino_buf);
 		return 1;
 	}
-
-	if (btrfs_dinode_copy(btrfs, a_fs_file->meta, inum, dino_buf)) {
+	if (btrfs_dinode_copy(btrfs, a_fs_file, inum, dino_buf)) {
 		free(dino_buf);
 		return 1;
 	}
@@ -389,7 +534,9 @@ btrfs_inode_walk(TSK_FS_INFO * fs, TSK_INUM_T start_inum,
 TSK_FS_BLOCK_FLAG_ENUM
 btrfs_block_getflags(TSK_FS_INFO * a_fs, TSK_DADDR_T a_addr)
 {
-	return -1;
+	int flags = 0;
+
+	return flags;
 }
 
 
@@ -409,6 +556,7 @@ static TSK_OFF_T
 btrfs_make_data_run_extent_data(TSK_FS_INFO * fs_info, TSK_FS_ATTR * fs_attr, btrfs_run_data *brd)
 {
 	TSK_FS_ATTR_RUN *data_run;
+	
 
 	if ((data_run = tsk_fs_attr_run_alloc()) == NULL)
 		return 1;
@@ -416,7 +564,6 @@ btrfs_make_data_run_extent_data(TSK_FS_INFO * fs_info, TSK_FS_ATTR * fs_attr, bt
 	data_run->offset = 0;
 	data_run->addr = (brd->data_addr / fs_info->block_size);
 	data_run->len = brd->data_len;
-
 
 	if (tsk_fs_attr_add_run(fs_info, fs_attr, data_run)) {
 		return 1;
@@ -429,27 +576,30 @@ btrfs_make_data_run_extent_data(TSK_FS_INFO * fs_info, TSK_FS_ATTR * fs_attr, bt
 
 /**
  * \internal
- * Loads attribute for Ext4 Extents-based storage method.
+ * Loads attribute for BTRFS Extents-based storage method.
  * @param fs_file File system to analyze
  * @returns 0 on success, 1 otherwise
  */
 static uint8_t
-btrfs_load_attrs_extent_data(TSK_FS_FILE *fs_file)
+btrfs_load_attrs_extents(TSK_FS_FILE *fs_file)
 {
 	TSK_FS_META *fs_meta = fs_file->meta;
 	TSK_FS_INFO *fs_info = fs_file->fs_info;
+	BTRFS_INFO * btrfs = (BTRFS_INFO*)fs_info;
 	TSK_OFF_T length = 0;
-	TSK_FS_ATTR *fs_attr;
-	btrfs_run_data * brd;
+	TSK_FS_ATTR * fs_attr;
+	btrfs_run_data *brd;
 
 	brd = (btrfs_run_data *)fs_meta->content_ptr;
 
 
 	if ((fs_meta->attr != NULL)
 		&& (fs_meta->attr_state == TSK_FS_META_ATTR_STUDIED)) {
+		fprintf(stderr, "[i] btrfs_load_attr_block: btrfs.c: %d - already studied, exiting load_attr_blk\n", __LINE__);
 		return 0;
 	}
 	else if (fs_meta->attr_state == TSK_FS_META_ATTR_ERROR) {
+		fprintf(stderr, "[i] btrfs_load_attr_block: btrfs.c: %d - error on attr, exiting load_attr_blk\n", __LINE__);
 		return 1;
 	}
 
@@ -457,13 +607,13 @@ btrfs_load_attrs_extent_data(TSK_FS_FILE *fs_file)
 		tsk_fs_attrlist_markunused(fs_meta->attr);
 	}
 	else {
-		fs_meta->attr = tsk_fs_attrlist_alloc();	
+		fs_meta->attr = tsk_fs_attrlist_alloc();
 	}
 
 	if (TSK_FS_TYPE_ISBTRFS(fs_info->ftype) == 0) {
 		tsk_error_set_errno(TSK_ERR_FS_INODE_COR);
 		tsk_error_set_errstr
-		("btrfs_load_attr: Called with non-ExtX file system: %x",
+		("btrfs_load_attr: Called with non-btrfs file system: %x",
 			fs_info->ftype);
 		return 1;
 	}
@@ -481,38 +631,48 @@ btrfs_load_attrs_extent_data(TSK_FS_FILE *fs_file)
 		fs_meta->size, fs_meta->size, length, 0, 0)) {
 		return 1;
 	}
-
 	// make file
 	if (brd->data_addr == 0x01) {
 		brd->data_addr = 0x00;
 		brd->data_len = 0x00;
-	} else {
+	}
+	else {
 		brd->data_len = length;
 	}
 
-	btrfs_make_data_run_extent_data(fs_info, fs_attr, brd);
-	
+	if (btrfs_make_data_run_extent_data(fs_info, fs_attr, brd)) {
+		fprintf(stderr, "[i] btrfs_load_attr_block: btrfs.c: %d - btrfs_make_data_run_extent failed.\n",
+			__LINE__);
+		return 1;
+	}
+
 	fs_meta->attr_state = TSK_FS_META_ATTR_STUDIED;
-		
+
 	return 0;
 }
+
+
 
 static uint8_t
 btrfs_load_attrs(TSK_FS_FILE * fs_file)
 {
-	/* EXT4 extents-based storage is dealt with differently than
-	* the traditional pointer lists. */
-	if (fs_file->meta->content_type == TSK_FS_META_CONTENT_TYPE_DEFAULT) {
-		return btrfs_load_attrs_extent_data(fs_file);
+	TSK_FS_INFO * fs = (TSK_FS_INFO*)fs_file->fs_info;
+	
+	if (fs_file->meta->content_type == TSK_FS_META_CONTENT_TYPE_BTRFS_EXTENTS) {
+		btrfs_load_attrs_extents(fs_file);
+	} else if (fs_file->meta->content_type == TSK_FS_META_CONTENT_TYPE_DEFAULT) {
+		btrfs_load_attrs_extents(fs_file);
+	} else if (fs_file->meta->content_type == TSK_FS_META_CONTENT_TYPE_BTRFS_INLINE) {
+		// inline is in dinode_copy
+		return 0;
 	}
 	else {
-		fprintf(stderr, "content_type = unknown content type\n");
+		fprintf(stderr, "contenttype = unknown content type\n");
+		return 1;
 	}
 
 	return 0;
 }
-
-
 
 
 typedef struct {
@@ -536,16 +696,14 @@ btrfs_close(TSK_FS_INFO * fs)
 {
 	BTRFS_INFO *btrfs = (BTRFS_INFO *)fs;
 
-	fs->tag = 0;
-	free(btrfs->fs);
 	free(btrfs->root_tree);
-	free(btrfs->root_phy_addr);
 	free(btrfs->chunk_tree);
 	free(btrfs->fs_tree);
-	free(btrfs->fs_phy_addr);
 	free(btrfs->fs_leaf);
 	free(btrfs->fs_leaf_phy_addr);
-	free(btrfs->fs_leaf_num);
+
+	fs->tag = 0;
+	free(btrfs->fs);
 
 	tsk_deinit_lock(&btrfs->lock);
 
@@ -556,7 +714,7 @@ btrfs_close(TSK_FS_INFO * fs)
 //fsstat
 uint8_t btrfs_fsstat(TSK_FS_INFO * fs, FILE * hFile)
 {
-	uint i;
+	unsigned int i;
 	const char *tmptypename;
 
 	BTRFS_INFO * btrfs = (BTRFS_INFO *)fs;
@@ -623,10 +781,54 @@ uint8_t btrfs_fsstat(TSK_FS_INFO * fs, FILE * hFile)
 }
 
 
-uint8_t btrfs_block_walk(TSK_FS_INFO * fs, TSK_DADDR_T start, TSK_DADDR_T end,
-	TSK_FS_BLOCK_WALK_FLAG_ENUM flags, TSK_FS_BLOCK_WALK_CB cb, void *ptr)
+uint8_t btrfs_block_walk(TSK_FS_INFO * a_fs, TSK_DADDR_T a_start_blk,
+	TSK_DADDR_T a_end_blk, TSK_FS_BLOCK_WALK_FLAG_ENUM a_flags,
+	TSK_FS_BLOCK_WALK_CB a_action, void *a_ptr)
 {
-	return -1;
+	char *myname = "extXfs_block_walk";
+	TSK_FS_BLOCK *fs_block;
+
+	// clean up any error messages that are lying around
+	tsk_error_reset();
+
+	/*
+	 * Sanity checks.
+	 */
+	if (a_start_blk < a_fs->first_block || a_start_blk > a_fs->last_block) {
+		tsk_error_reset();
+		tsk_error_set_errno(TSK_ERR_FS_WALK_RNG);
+		tsk_error_set_errstr("%s: start block: %" PRIuDADDR, myname,
+			a_start_blk);
+		return 1;
+	}
+	if (a_end_blk < a_fs->first_block || a_end_blk > a_fs->last_block
+		|| a_end_blk < a_start_blk) {
+		tsk_error_reset();
+		tsk_error_set_errno(TSK_ERR_FS_WALK_RNG);
+		tsk_error_set_errstr("%s: end block: %" PRIuDADDR, myname,
+			a_end_blk);
+		return 1;
+	}
+
+	/* Sanity check on a_flags -- make sure at least one ALLOC is set */
+	if (((a_flags & TSK_FS_BLOCK_WALK_FLAG_ALLOC) == 0) &&
+		((a_flags & TSK_FS_BLOCK_WALK_FLAG_UNALLOC) == 0)) {
+		a_flags |=
+			(TSK_FS_BLOCK_WALK_FLAG_ALLOC |
+				TSK_FS_BLOCK_WALK_FLAG_UNALLOC);
+	}
+	if (((a_flags & TSK_FS_BLOCK_WALK_FLAG_META) == 0) &&
+		((a_flags & TSK_FS_BLOCK_WALK_FLAG_CONT) == 0)) {
+		a_flags |=
+			(TSK_FS_BLOCK_WALK_FLAG_CONT | TSK_FS_BLOCK_WALK_FLAG_META);
+	}
+
+
+	if ((fs_block = tsk_fs_block_alloc(a_fs)) == NULL) {
+		return 1;
+	}
+
+	return 0;
 }
 
 /**
@@ -762,7 +964,7 @@ btrfs_open(TSK_IMG_INFO * img_info, TSK_OFF_T offset,
 
 	// initializing chunk tree
 	btrfs_init_chunk(btrfs);
-	
+
 	// initializing root tree
 	btrfs_init_root(btrfs);
 
@@ -772,7 +974,7 @@ btrfs_open(TSK_IMG_INFO * img_info, TSK_OFF_T offset,
 	// initializing root leaf
 	btrfs_get_fs_leaf(btrfs);
 	fs->last_inum = btrfs_get_last_inum(btrfs);
-	
+
 	if ((fs->block_size == 0) || (fs->block_size % 512)) {
 		fs->tag = 0;
 		free(btrfs->fs);
@@ -818,4 +1020,3 @@ btrfs_open(TSK_IMG_INFO * img_info, TSK_OFF_T offset,
 
 	return fs;
 }
-

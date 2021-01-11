@@ -283,7 +283,7 @@ tsk_fs_file_attr_get(TSK_FS_FILE * a_fs_file)
 {
     TSK_FS_ATTR_TYPE_ENUM type;
     TSK_FS_INFO *fs;
-
+	
     if (tsk_fs_file_attr_check(a_fs_file, "tsk_fs_file_attr_get"))
         return NULL;
 

@@ -38,6 +38,7 @@ btrfs_dent_copy(BTRFS_INFO * btrfs,
 	fs_name->type = TSK_FS_NAME_TYPE_UNDEF;
 	fs_name->meta_addr = tsk_getu64(fs->endian, dir_item->location.objectid);
 
+
 	switch (dir_item->type) {
 		case BTRFS_DE_REG:
 			fs_name->type = TSK_FS_NAME_TYPE_REG;
@@ -89,10 +90,10 @@ btrfs_dent_parse_leaf(BTRFS_INFO * btrfs, TSK_FS_DIR * a_fs_dir, uint8_t a_is_de
 	/* update each time by the actual length instead of the
 	 ** recorded length so we can view the deleted entries
 	 */
-	
+		
 	if ((leaf_addr[0] != 0x01) && (leaf_addr[0] == 0x00)) {
 		int leaf_num = btrfs_seek_inode_where_leaf(btrfs, inum, 0);
-		leaf_addr[0] = btrfs->fs_leaf_phy_addr[0][leaf_num];
+		leaf_addr[0] = btrfs->fs_leaf_phy_addr[leaf_num];
 	}
 
 	btrfs_seek_dir_item(btrfs, inum, 0, leaf_addr[0]);
@@ -104,7 +105,6 @@ btrfs_dent_parse_leaf(BTRFS_INFO * btrfs, TSK_FS_DIR * a_fs_dir, uint8_t a_is_de
 
 		inode = tsk_getu64(fs->endian, dir_item->location.objectid);
 		namelen = tsk_getu16(fs->endian, dir_item->name_len);
-
 		/*
 		 ** Check if we may have a valid directory entry.  If we don't,
 		 ** then increment to the next word and try again.
@@ -116,7 +116,6 @@ btrfs_dent_parse_leaf(BTRFS_INFO * btrfs, TSK_FS_DIR * a_fs_dir, uint8_t a_is_de
 			tsk_fs_name_free(fs_name);
 			return TSK_ERR;
 		}
-
 
 		fs_name->flags = TSK_FS_NAME_FLAG_ALLOC;
 
@@ -131,13 +130,6 @@ btrfs_dent_parse_leaf(BTRFS_INFO * btrfs, TSK_FS_DIR * a_fs_dir, uint8_t a_is_de
 	return TSK_OK;
 }
 
-/*
-static TSK_RETVAL_ENUM
-btrfs_dent_parse(BTRFS_INFO * btrfs, TSK_FS_DIR * a_fs_dir, uint8_t a_is_del, TSK_LIST ** list_seen, char *buf, TSK_OFF_T offset)
-{
-	return -1;
-}
-*/
 
 
 /** \internal

@@ -73,6 +73,7 @@
 
 #include "tsk_fs_i.h"
 #include "tsk_hfs.h"
+#include "decmpfs.h"
 
 #include <stdarg.h>
 #ifdef TSK_WIN32
@@ -96,139 +97,8 @@ static uint8_t hfs_load_attrs(TSK_FS_FILE * fs_file);
 static uint8_t hfs_load_extended_attrs(TSK_FS_FILE * file,
     unsigned char *isCompressed, unsigned char *cmpType,
     uint64_t * uncSize);
-void error_detected(uint32_t errnum, char *errstr, ...);
-void error_returned(char *errstr, ...);
-
-#ifdef HAVE_LIBZ
-
-/***************** ZLIB stuff *******************************/
-
-// Adapted from zpipe.c (part of zlib) at http://zlib.net/zpipe.c
-#define CHUNK 16384
-
-/*
- * Invokes the zlib library to inflate (uncompress) data.
- *
- * Returns and error code.  Places the uncompressed data in a buffer supplied by the caller.  Also
- * returns the uncompressed length, and the number of compressed bytes consumed.
- *
- * Will stop short of the end of compressed data, if a natural end of a compression unit is reached.  Using
- * bytesConsumed, the caller can then advance the source pointer, and re-invoke the function.  This will then
- * inflate the next following compression unit in the data stream.
- *
- * @param source - buffer of compressed data
- * @param sourceLen  - length of the compressed data.
- * @param dest  -- buffer to  hold the uncompressed results
- * @param destLen -- length of the dest buffer
- * @param uncompressedLength  -- return of the length of the uncompressed data found.
- * @param bytesConsumed  -- return of the number of input bytes of compressed data used.
- * @return 0 on success, a negative number on error
- */
-static int
-zlib_inflate(char *source, uint64_t sourceLen, char *dest, uint64_t destLen, uint64_t * uncompressedLength, unsigned long *bytesConsumed)       // this is unsigned long because that's what zlib uses.
-{
-
-    int ret;
-    unsigned have;
-    z_stream strm;
-    unsigned char in[CHUNK];
-    unsigned char out[CHUNK];
-
-    // Some vars to help with copying bytes into "in"
-    char *srcPtr = source;
-    char *destPtr = dest;
-    uint64_t srcAvail = sourceLen;      //uint64_t
-    uint64_t amtToCopy;
-    uint64_t copiedSoFar = 0;
-
-    /* allocate inflate state */
-    strm.zalloc = Z_NULL;
-    strm.zfree = Z_NULL;
-    strm.opaque = Z_NULL;
-    strm.avail_in = 0;
-    strm.next_in = Z_NULL;
-    ret = inflateInit(&strm);
-    if (ret != Z_OK) {
-        error_detected(TSK_ERR_FS_READ,
-            "zlib_inflate: failed to initialize inflation engine (%d)",
-            ret);
-        return ret;
-    }
-
-    /* decompress until deflate stream ends or end of file */
-    do {
-
-        // Copy up to CHUNK bytes into "in" from source, advancing the pointer, and
-        // setting strm.avail_in equal to the number of bytes copied.
-        if (srcAvail >= CHUNK) {
-            amtToCopy = CHUNK;
-            srcAvail -= CHUNK;
-        }
-        else {
-            amtToCopy = srcAvail;
-            srcAvail = 0;
-        }
-        // wipe out any previous value, copy in the bytes, advance the pointer, record number of bytes.
-        memset(in, 0, CHUNK);
-        if (amtToCopy > SIZE_MAX || amtToCopy > UINT_MAX) {
-            error_detected(TSK_ERR_FS_READ,
-                "zlib_inflate: amtToCopy in one chunk is too large");
-            return -100;
-        }
-        memcpy(in, srcPtr, (size_t) amtToCopy); // cast OK because of above test
-        srcPtr += amtToCopy;
-        strm.avail_in = (uInt) amtToCopy;       // cast OK because of above test
-
-        if (strm.avail_in == 0)
-            break;
-        strm.next_in = in;
-
-        /* run inflate() on input until output buffer not full */
-        do {
-            strm.avail_out = CHUNK;
-            strm.next_out = out;
-            ret = inflate(&strm, Z_NO_FLUSH);
-            if (ret == Z_NEED_DICT)
-                ret = Z_DATA_ERROR;     // we don't have a custom dict
-            if (ret < 0 && ret != Z_BUF_ERROR) { // Z_BUF_ERROR is not fatal
-                error_detected(TSK_ERR_FS_READ,
-                    " zlib_inflate: zlib returned error %d (%s)", ret,
-                    strm.msg);
-                (void) inflateEnd(&strm);
-                return ret;
-            }
-
-            have = CHUNK - strm.avail_out;
-            // Is there enough space in dest to copy the current chunk?
-            if (copiedSoFar + have > destLen) {
-                // There is not enough space, so better return an error
-                error_detected(TSK_ERR_FS_READ,
-                    " zlib_inflate: not enough space in inflation destination\n");
-                (void) inflateEnd(&strm);
-                return -200;
-            }
-
-            // Copy "have" bytes from out to destPtr, advance destPtr
-            memcpy(destPtr, out, have);
-            destPtr += have;
-            copiedSoFar += have;
-
-        } while ((strm.avail_out == 0) && (ret != Z_STREAM_END));
-
-
-        /* done when inflate() says it's done */
-    } while (ret != Z_STREAM_END);
-
-    if (ret == Z_STREAM_END)
-        *uncompressedLength = copiedSoFar;
-
-    *bytesConsumed = strm.total_in;
-    /* clean up and return */
-    (void) inflateEnd(&strm);
-    return ret == Z_STREAM_END ? Z_OK : Z_DATA_ERROR;
-}
-
-#endif
+void error_detected(uint32_t errnum, const char *errstr, ...);
+void error_returned(const char *errstr, ...);
 
 /* may set error up to string 1
  * returns 0 on success, 1 on failure */
@@ -382,7 +252,7 @@ hfs_extents_to_attr(TSK_FS_INFO * a_fs, const hfs_ext_desc * a_extents,
 
     if (tsk_verbose)
         tsk_fprintf(stderr,
-            "hfs_extents_to_attr: Converting extents from offset %" PRIuOFF
+            "hfs_extents_to_attr: Converting extents from offset %" PRIdOFF
             " to runlist\n", a_start_off);
 
     for (i = 0; i < 8; ++i) {
@@ -545,7 +415,7 @@ hfs_ext_find_extent_record_attr(HFS_INFO * hfs, uint32_t cnid,
         if (tsk_verbose)
             tsk_fprintf(stderr,
                 "hfs_ext_find_extent_record: reading node %" PRIu32
-                " at offset %" PRIuOFF "\n", cur_node, cur_off);
+                " at offset %" PRIdOFF "\n", cur_node, cur_off);
 
         cnt = tsk_fs_attr_read(hfs->extents_attr, cur_off,
             node, nodesize, 0);
@@ -556,7 +426,7 @@ hfs_ext_find_extent_record_attr(HFS_INFO * hfs, uint32_t cnid,
             }
             tsk_error_set_errstr2
                 ("hfs_ext_find_extent_record_attr: Error reading node %d at offset %"
-                PRIuOFF, cur_node, cur_off);
+                PRIdOFF, cur_node, cur_off);
             free(node);
             return 1;
         }
@@ -697,6 +567,18 @@ hfs_ext_find_extent_record_attr(HFS_INFO * hfs, uint32_t cnid,
                     free(node);
                     return 1;
                 }
+
+                // Check that the whole hfs_btree_key_ext structure is set
+                if (sizeof(hfs_btree_key_ext) > nodesize - rec_off) {
+                    tsk_error_set_errno(TSK_ERR_FS_GENFS);
+                    tsk_error_set_errstr
+                    ("hfs_ext_find_extent_record_attr: record %d in leaf node %d truncated (have %d vs %"
+                        PRIu16 " bytes)", rec, cur_node, nodesize - (int)rec_off,
+                        sizeof(hfs_btree_key_ext));
+                    free(node);
+                    return 1;
+                }
+
                 key = (hfs_btree_key_ext *) & node[rec_off];
 
                 if (tsk_verbose)
@@ -785,7 +667,7 @@ hfs_ext_find_extent_record_attr(HFS_INFO * hfs, uint32_t cnid,
         else {
             tsk_error_set_errno(TSK_ERR_FS_GENFS);
             tsk_error_set_errstr("hfs_ext_find_extent_record: btree node %"
-                PRIu32 " (%" PRIuOFF ") is neither index nor leaf (%" PRIu8
+                PRIu32 " (%" PRIdOFF ") is neither index nor leaf (%" PRIu8
                 ")", cur_node, cur_off, node_desc->type);
             free(node);
             return 1;
@@ -898,7 +780,7 @@ hfs_cat_traverse(HFS_INFO * hfs,
             }
             tsk_error_set_errstr2
                 ("hfs_cat_traverse: Error reading node %d at offset %"
-                PRIuOFF, cur_node, cur_off);
+                PRIdOFF, cur_node, cur_off);
             free(node);
             return 1;
         }
@@ -954,10 +836,9 @@ hfs_cat_traverse(HFS_INFO * hfs,
                 }
 
                 key = (hfs_btree_key_cat *) & node[rec_off];
-
                 keylen = 2 + tsk_getu16(hfs->fs_info.endian, key->key_len);
-               
-                if (keylen >= nodesize - rec_off) {
+
+                if (keylen > nodesize - rec_off) {
                     tsk_error_set_errno(TSK_ERR_FS_GENFS);
                     tsk_error_set_errstr
                         ("hfs_cat_traverse: length of key %d in index node %d too large (%d vs %"
@@ -965,7 +846,6 @@ hfs_cat_traverse(HFS_INFO * hfs,
                     free(node);
                     return 1;
                 }
-
 
                 /*
                    if (tsk_verbose)
@@ -995,12 +875,18 @@ hfs_cat_traverse(HFS_INFO * hfs,
                     int keylen =
                         2 + hfs_get_idxkeylen(hfs, tsk_getu16(fs->endian,
                             key->key_len), &(hfs->catalog_header));
-                    if (rec_off + keylen > nodesize) {
+                    if (keylen > nodesize - rec_off) {
                         tsk_error_set_errno(TSK_ERR_FS_GENFS);
                         tsk_error_set_errstr
                             ("hfs_cat_traverse: offset of record and keylength %d in index node %d too large (%d vs %"
                             PRIu16 ")", rec, cur_node,
                             (int) rec_off + keylen, nodesize);
+                        free(node);
+                        return 1;
+                    }
+                    if (sizeof(hfs_btree_index_record) > nodesize - rec_off - keylen) {
+                        tsk_error_set_errno(TSK_ERR_FS_GENFS);
+                        tsk_error_set_errstr("hfs_cat_traverse: truncated btree index record");
                         free(node);
                         return 1;
                     }
@@ -1058,10 +944,11 @@ hfs_cat_traverse(HFS_INFO * hfs,
                     free(node);
                     return 1;
                 }
-                key = (hfs_btree_key_cat *) & node[rec_off];
 
+                key = (hfs_btree_key_cat *) & node[rec_off];
                 keylen = 2 + tsk_getu16(hfs->fs_info.endian, key->key_len);
-                if ((keylen) > nodesize) {
+
+                if (keylen > nodesize - rec_off) {
                     tsk_error_set_errno(TSK_ERR_FS_GENFS);
                     tsk_error_set_errstr
                         ("hfs_cat_traverse: length of key %d in leaf node %d too large (%d vs %"
@@ -1186,7 +1073,6 @@ hfs_cat_get_record_offset(HFS_INFO * hfs, const hfs_btree_key_cat * needle)
 }
 
 
-
 /** \internal
  * Given a byte offset to a leaf record in teh catalog file, read the data as
  * a thread record. This will zero the buffer and read in the size of the thread
@@ -1212,7 +1098,7 @@ hfs_cat_read_thread_record(HFS_INFO * hfs, TSK_OFF_T off,
         }
         tsk_error_set_errstr2
             ("hfs_cat_read_thread_record: Error reading catalog offset %"
-            PRIuOFF " (header)", off);
+            PRIdOFF " (header)", off);
         return 1;
     }
 
@@ -1245,7 +1131,7 @@ hfs_cat_read_thread_record(HFS_INFO * hfs, TSK_OFF_T off,
         }
         tsk_error_set_errstr2
             ("hfs_cat_read_thread_record: Error reading catalog offset %"
-            PRIuOFF " (name)", off + 10);
+            PRIdOFF " (name)", off + 10);
         return 1;
     }
 
@@ -1278,7 +1164,7 @@ hfs_cat_read_file_folder_record(HFS_INFO * hfs, TSK_OFF_T off,
         }
         tsk_error_set_errstr2
             ("hfs_cat_read_file_folder_record: Error reading record type from catalog offset %"
-            PRIuOFF " (header)", off);
+            PRIdOFF " (header)", off);
         return 1;
     }
 
@@ -1293,7 +1179,7 @@ hfs_cat_read_file_folder_record(HFS_INFO * hfs, TSK_OFF_T off,
             }
             tsk_error_set_errstr2
                 ("hfs_cat_read_file_folder_record: Error reading catalog offset %"
-                PRIuOFF " (folder)", off);
+                PRIdOFF " (folder)", off);
             return 1;
         }
     }
@@ -1308,7 +1194,7 @@ hfs_cat_read_file_folder_record(HFS_INFO * hfs, TSK_OFF_T off,
             }
             tsk_error_set_errstr2
                 ("hfs_cat_read_file_folder_record: Error reading catalog offset %"
-                PRIuOFF " (file)", off);
+                PRIdOFF " (file)", off);
             return 1;
         }
     }
@@ -1322,7 +1208,6 @@ hfs_cat_read_file_folder_record(HFS_INFO * hfs, TSK_OFF_T off,
 
     return 0;
 }
-
 
 // hfs_lookup_hard_link appears to be unnecessary - it looks up the cnid
 // by seeing if there's a file/dir with the standard hard link name plus
@@ -2467,9 +2352,9 @@ hfs_dinode_copy(HFS_INFO * a_hfs, const HFS_ENTRY * a_hfs_entry,
     // that case, we want to make sure that a_fs_file points consistently to the target of the
     // link.
 
-    if (a_fs_file->name != NULL) {
-        a_fs_file->name->meta_addr = a_fs_meta->addr;
-    }
+    //if (a_fs_file->name != NULL) {
+    //    a_fs_file->name->meta_addr = a_fs_meta->addr;
+    //}
 
     /* TODO @@@ could fill in name2 with this entry's name and parent inode
        from Catalog entry */
@@ -2612,7 +2497,6 @@ hfs_inode_lookup(TSK_FS_INFO * fs, TSK_FS_FILE * a_fs_file,
 
     return 0;
 }
-
 
 typedef struct {
     uint32_t offset;
@@ -3348,8 +3232,8 @@ hfs_file_read_compressed_rsrc(const TSK_FS_ATTR * a_fs_attr,
 
     if (tsk_verbose)
         tsk_fprintf(stderr,
-            "%s: reading compression units: %" PRIuOFF
-            " to %" PRIuOFF "\n", __func__, startUnit, endUnit);
+            "%s: reading compression units: %" PRIdOFF
+            " to %" PRIdOFF "\n", __func__, startUnit, endUnit);
     bytesCopied = 0;
 
     // Allocate buffers for the raw and uncompressed data
@@ -4337,7 +4221,7 @@ hfs_load_extended_attrs(TSK_FS_FILE * fs_file,
                     // Data is inline. We will load the uncompressed
                     // data as a resident attribute.
                     case DECMPFS_TYPE_ZLIB_ATTR:
-                        if (!hfs_file_read_zlib_attr(
+                        if (!decmpfs_file_read_zlib_attr(
                                 fs_file, buffer, attributeLength, uncSize))
                         {
                             goto on_error;
@@ -4345,7 +4229,7 @@ hfs_load_extended_attrs(TSK_FS_FILE * fs_file,
                         break;
 
                     case DECMPFS_TYPE_LZVN_ATTR:
-                        if (!hfs_file_read_lzvn_attr(
+                        if (!decmpfs_file_read_lzvn_attr(
                                 fs_file, buffer, attributeLength, uncSize))
                         {
                             goto on_error;
@@ -5034,8 +4918,8 @@ hfs_load_attrs(TSK_FS_FILE * fs_file)
                 switch (cmpType) {
                 case DECMPFS_TYPE_ZLIB_RSRC:
 #ifdef HAVE_LIBZ
-                    fs_attr->w = hfs_attr_walk_zlib_rsrc;
-                    fs_attr->r = hfs_file_read_zlib_rsrc;
+                    fs_attr->w = decmpfs_attr_walk_zlib_rsrc;
+                    fs_attr->r = decmpfs_file_read_zlib_rsrc;
 #else
                     // We don't have zlib, so the uncompressed data is not
                     // available to us; however, we must have a default DATA
@@ -5055,8 +4939,8 @@ hfs_load_attrs(TSK_FS_FILE * fs_file)
 
                 case DECMPFS_TYPE_LZVN_RSRC:
 
-                    fs_attr->w = hfs_attr_walk_lzvn_rsrc;
-                    fs_attr->r = hfs_file_read_lzvn_rsrc;
+                    fs_attr->w = decmpfs_attr_walk_lzvn_rsrc;
+                    fs_attr->r = decmpfs_file_read_lzvn_rsrc;
 
                     break;
                 }
@@ -5164,7 +5048,7 @@ hfs_block_is_alloc(HFS_INFO * hfs, TSK_DADDR_T a_addr)
     if (b > hfs->blockmap_file->meta->size) {
         tsk_error_set_errno(TSK_ERR_FS_CORRUPT);
         tsk_error_set_errstr("hfs_block_is_alloc: block %" PRIuDADDR
-            " is too large for bitmap (%" PRIuOFF ")", a_addr,
+            " is too large for bitmap (%" PRIdOFF ")", a_addr,
             hfs->blockmap_file->meta->size);
         return -1;
     }
@@ -5179,7 +5063,7 @@ hfs_block_is_alloc(HFS_INFO * hfs, TSK_DADDR_T a_addr)
         if (cnt < 1) {
             tsk_error_set_errstr2
                 ("hfs_block_is_alloc: Error reading block bitmap at offset %"
-                PRIuOFF, b);
+					PRIdOFF, b);
             return -1;
         }
         hfs->blockmap_cache_start = b;
@@ -5556,7 +5440,7 @@ hfs_fsstat(TSK_FS_INFO * fs, FILE * hFile)
 
     if (hfs->hfs_wrapper_offset > 0) {
         tsk_fprintf(hFile,
-            "File system is embedded in an HFS wrapper at offset %" PRIuOFF
+            "File system is embedded in an HFS wrapper at offset %" PRIdOFF
             "\n", hfs->hfs_wrapper_offset);
     }
 
@@ -5917,7 +5801,7 @@ hfs_istat(TSK_FS_INFO * fs, TSK_FS_ISTAT_FLAG_ENUM istat_flags, FILE * hFile, TS
 
     tsk_fs_meta_make_ls(fs_file->meta, hfs_mode, sizeof(hfs_mode));
     tsk_fprintf(hFile, "Mode:\t%s\n", hfs_mode);
-    tsk_fprintf(hFile, "Size:\t%" PRIuOFF "\n", fs_file->meta->size);
+    tsk_fprintf(hFile, "Size:\t%" PRIdOFF "\n", fs_file->meta->size);
 
     if (fs_file->meta->link)
         tsk_fprintf(hFile, "Symbolic link to:\t%s\n", fs_file->meta->link);
@@ -6212,7 +6096,7 @@ hfs_istat(TSK_FS_INFO * fs, TSK_FS_ISTAT_FLAG_ENUM istat_flags, FILE * hFile, TS
                 tsk_fprintf(hFile,
                     "Type: %s (%" PRIu32 "-%" PRIu16
                     ")   Name: %s   Non-Resident%s%s%s   size: %"
-                    PRIuOFF "  init_size: %" PRIuOFF "\n", type,
+					PRIdOFF "  init_size: %" PRIdOFF "\n", type,
                     fs_attr->type, fs_attr->id,
                     (fs_attr->name) ? fs_attr->name : "N/A",
                     (fs_attr->flags & TSK_FS_ATTR_ENC) ? ", Encrypted" :
@@ -6234,7 +6118,7 @@ hfs_istat(TSK_FS_INFO * fs, TSK_FS_ISTAT_FLAG_ENUM istat_flags, FILE * hFile, TS
                 tsk_fprintf(hFile,
                     "Type: %s (%" PRIu32 "-%" PRIu16
                     ")   Name: %s   Resident%s%s%s   size: %"
-                    PRIuOFF "\n",
+					PRIdOFF "\n",
                     type,
                     fs_attr->type,
                     fs_attr->id,
@@ -6562,7 +6446,7 @@ hfs_open(TSK_IMG_INFO * img_info, TSK_OFF_T offset,
             if (tsk_verbose)
                 tsk_fprintf(stderr,
                     "hfs_open: HFS+/HFSX within HFS wrapper at byte offset %"
-                    PRIuOFF "\n", hfsplus_offset);
+					PRIdOFF "\n", hfsplus_offset);
 
             fs->tag = 0;
             free(hfs->fs);
@@ -6883,7 +6767,7 @@ hfs_open(TSK_IMG_INFO * img_info, TSK_OFF_T offset,
  * @param errstr  The format string for the error message
  */
 void
-error_detected(uint32_t errnum, char *errstr, ...)
+error_detected(uint32_t errnum, const char *errstr, ...)
 {
     va_list args;
 
@@ -6923,7 +6807,7 @@ error_detected(uint32_t errnum, char *errstr, ...)
  * @param errstr  The format string for the error message
  */
 void
-error_returned(char *errstr, ...)
+error_returned(const char *errstr, ...)
 {
     va_list args;
     va_start(args, errstr);

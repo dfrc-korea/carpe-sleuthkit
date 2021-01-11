@@ -25,13 +25,10 @@ static int files_found;
 typedef int64_t           xfs_off_t;  /* <file offset> type */
 typedef uint32_t  xfs_rfsblock_t; /* blockno in filesystem (raw) */
 typedef uint64_t XFS_AGNUM_T;
-typedef uint        xfs_dir2_data_aoff_t;   /* argument form */
+typedef unsigned int    xfs_dir2_data_aoff_t;   /* argument form */
 typedef uint32_t    xfs_dir2_dataptr_t;
 
-#define __round_mask(x, y) ((__typeof__(x))((y)-1))
-#define round_up(x, y) ((((x)-1) | __round_mask(x, y))+1)
-
-#define 	XFS_MIN_AG_BLOCKS   64
+#define     XFS_MIN_AG_BLOCKS   64
 // for checking filesystem sanity checking
 #define XFS_MAX_DBLOCKS(fs, s) ( \
     tsk_getu32(&(fs->endian), (s)->sb_agcount) * \
@@ -164,7 +161,7 @@ static inline uint64_t xfs_mask64lo(int n)
 #define XFS_SB_VERSION_5    5       /* CRC enabled filesystem */
 
 #define XFS_SB_FEAT_COMPAT_ALL 0
-#define XFS_SB_FEAT_COMPAT_UNKNOWN	~XFS_SB_FEAT_COMPAT_ALL
+#define XFS_SB_FEAT_COMPAT_UNKNOWN  ~XFS_SB_FEAT_COMPAT_ALL
 // sb version checker
 
 
@@ -235,16 +232,16 @@ static inline bool xfs_sb_has_incompat_log_feature(
 // crc offset of sb
 #define XFS_SB_CRC_OFF      offsetof(struct xfs_sb, sb_crc)
 
-#define XFS_DIR3_FT_UNKNOWN		0
-#define XFS_DIR3_FT_REG_FILE		1
-#define XFS_DIR3_FT_DIR			2
-#define XFS_DIR3_FT_CHRDEV		3
-#define XFS_DIR3_FT_BLKDEV		4
-#define XFS_DIR3_FT_FIFO		5
-#define XFS_DIR3_FT_SOCK		6
-#define XFS_DIR3_FT_SYMLINK		7
-#define XFS_DIR3_FT_WHT			8
-#define XFS_DIR3_FT_MAX			9
+#define XFS_DIR3_FT_UNKNOWN     0
+#define XFS_DIR3_FT_REG_FILE        1
+#define XFS_DIR3_FT_DIR         2
+#define XFS_DIR3_FT_CHRDEV      3
+#define XFS_DIR3_FT_BLKDEV      4
+#define XFS_DIR3_FT_FIFO        5
+#define XFS_DIR3_FT_SOCK        6
+#define XFS_DIR3_FT_SYMLINK     7
+#define XFS_DIR3_FT_WHT         8
+#define XFS_DIR3_FT_MAX         9
 
 /*
  * For special situations, the dirent size ends up fixed because we always know
@@ -259,6 +256,8 @@ static inline bool xfs_sb_has_incompat_log_feature(
  * calculations. We also use round_up() as XFS_DIR2_DATA_ALIGN is always a power
  * of 2 and the compiler doesn't reject it (unlike roundup()).
  */
+
+
 #define XFS_DIR2_DATA_ENTSIZE(n)                    \
     round_up((offsetof(struct xfs_dir2_data_entry, name[0]) + (n) + \
          sizeof(uint16_t)), XFS_DIR2_DATA_ALIGN)
@@ -267,6 +266,8 @@ static inline bool xfs_sb_has_incompat_log_feature(
     round_up((offsetof(struct xfs_dir2_data_entry, name[0]) + (n) + \
          sizeof(uint16_t) + sizeof(uint8_t)),    \
         XFS_DIR2_DATA_ALIGN)
+
+
 
 /*
     Superblock - Must be padded to 64 bit alignment.
@@ -442,7 +443,7 @@ typedef enum {
     XFS_BTNUM_MAX
 } xfs_btnum_t;
  // kyu
-#define	XFS_BTNUM_AGF	((int)XFS_BTNUM_CNTi + 1)
+#define XFS_BTNUM_AGF   ((int)XFS_BTNUM_CNTi + 1)
 /*
     AG Free Block Info
 */
@@ -490,7 +491,7 @@ typedef struct xfs_agf {
     /* structure must be padded to 64 bit alignment */
 } xfs_agf_t;
 
-#define 	XFS_AGI_UNLINKED_BUCKETS   64 // kyu
+#define     XFS_AGI_UNLINKED_BUCKETS   64 // kyu
 
 /*
     AG Inode B+ Tree Info
@@ -534,7 +535,7 @@ typedef struct xfs_agi {
     /* structure must be padded to 64 bit alignment */
 } xfs_agi_t;
 
-typedef uint64_t	xfs_ino_t;
+typedef uint64_t    xfs_ino_t;
 
 /*
     AG Free space B+ Tree Info
@@ -550,8 +551,8 @@ typedef uint64_t	xfs_ino_t;
 //} __attribute__((packed)) xfs_agfl_t;
 
 typedef struct xfs_timestamp {
-	uint32_t		t_sec;		/* timestamp seconds */
-	uint32_t		t_nsec;		/* timestamp nanoseconds */
+    uint32_t        t_sec;      /* timestamp seconds */
+    uint32_t        t_nsec;     /* timestamp nanoseconds */
 } xfs_timestamp_t;
 
 /*
@@ -673,7 +674,7 @@ typedef struct xfs_bmdr_block {
     uint8_t      bb_numrecs[2]; /* current # of data records */
 } xfs_bmdr_block_t;
 
-typedef uint64_t	xfs_bmbt_rec_base_t;	/* use this for casts */
+typedef uint64_t    xfs_bmbt_rec_base_t;    /* use this for casts */
 //typedef xfs_bmbt_rec_t xfs_bmdr_rec_t;
 
 /*
@@ -716,13 +717,13 @@ typedef struct xfs_dir2_sf {
 
 static inline uint32_t get_unaligned_be32(const uint8_t *p)
 {
-	return p[0] << 24 | p[1] << 16 | p[2] << 8 | p[3];
+    return p[0] << 24 | p[1] << 16 | p[2] << 8 | p[3];
 }
 
 static inline uint64_t get_unaligned_be64(const uint8_t *p)
 {
-	return (uint64_t)get_unaligned_be32(p) << 32 |
-	       get_unaligned_be32(p + 4);
+    return (uint64_t)get_unaligned_be32(p) << 32 |
+           get_unaligned_be32(p + 4);
 }
 
 
@@ -1071,11 +1072,11 @@ struct xfs_btree_block {
  * Values for di_format
  */
 typedef enum xfs_dinode_fmt {
-	XFS_DINODE_FMT_DEV,		/* xfs_dev_t */
-	XFS_DINODE_FMT_LOCAL,		/* bulk data */
-	XFS_DINODE_FMT_EXTENTS,		/* struct xfs_bmbt_rec */
-	XFS_DINODE_FMT_BTREE,		/* struct xfs_bmdr_block */
-	XFS_DINODE_FMT_UUID		/* added long ago, but never used */
+    XFS_DINODE_FMT_DEV,     /* xfs_dev_t */
+    XFS_DINODE_FMT_LOCAL,       /* bulk data */
+    XFS_DINODE_FMT_EXTENTS,     /* struct xfs_bmbt_rec */
+    XFS_DINODE_FMT_BTREE,       /* struct xfs_bmdr_block */
+    XFS_DINODE_FMT_UUID     /* added long ago, but never used */
 } xfs_dinode_fmt_t;
 
 /************** JOURNAL ******************/
@@ -1200,13 +1201,13 @@ xfs_dir2_block_leaf_p(XFS_INFO *xfs, struct xfs_dir2_block_tail *btp)
 
 static uint8_t
 xfs_dir3_sfe_get_ftype(
-	struct xfs_dir2_sf_entry *sfep)
+    struct xfs_dir2_sf_entry *sfep)
 {
-    uint8_t	ftype;
-	ftype = sfep->name[sfep->namelen];
-	if (ftype >= XFS_DIR3_FT_MAX)
-		return XFS_DIR3_FT_UNKNOWN;
-	return ftype;
+    uint8_t ftype;
+    ftype = sfep->name[sfep->namelen];
+    if (ftype >= XFS_DIR3_FT_MAX)
+        return XFS_DIR3_FT_UNKNOWN;
+    return ftype;
 }
 
 static uint8_t
@@ -1242,16 +1243,15 @@ TSK_OFF_T xfs_inode_get_offset(XFS_INFO * xfs, TSK_INUM_T a_addr){
     /* lock access to grp_buf */
     tsk_take_lock(&xfs->lock);
 
-    uint32_t ag_num = a_addr >> (sb_agblklog + sb_inopblog);
+    uint32_t ag_num = a_addr >> sb_agblklog >> sb_inopblog;
     uint32_t blk_num = (a_addr - (ag_num << (sb_agblklog + sb_inopblog))) >> sb_inopblog;
     uint32_t sec_num = (a_addr - (ag_num << (sb_agblklog + sb_inopblog)) - (blk_num << sb_inopblog));
-
     tsk_release_lock(&xfs->lock);
 
-    TSK_OFF_T ag_offset = ag_num * (tsk_getu32(fs->endian, xfs->fs->sb_agblocks) * tsk_getu32(fs->endian, xfs->fs->sb_blocksize));
-    TSK_OFF_T blk_offset = blk_num * tsk_getu32(fs->endian, xfs->fs->sb_blocksize);
-    TSK_OFF_T sec_offset = sec_num * tsk_getu16(fs->endian, xfs->fs->sb_sectsize);
-    
+    TSK_OFF_T ag_offset = ag_num * (TSK_OFF_T)tsk_getu32(fs->endian, xfs->fs->sb_agblocks) * (TSK_OFF_T)tsk_getu32(fs->endian, xfs->fs->sb_blocksize);
+    //TSK_OFF_T test = 0x63FFC0000;
+    TSK_OFF_T blk_offset = blk_num * (TSK_OFF_T)tsk_getu32(fs->endian, xfs->fs->sb_blocksize);
+    TSK_OFF_T sec_offset = sec_num * (TSK_OFF_T)tsk_getu16(fs->endian, xfs->fs->sb_sectsize);
     offset = ag_offset + blk_offset + sec_offset;
 
     return offset;
@@ -1263,19 +1263,20 @@ typedef enum {
 
 typedef struct xfs_bmbt_irec {
     uint64_t        br_startoff;
-    uint32_t 	    br_startblock;
+    uint32_t        br_startblock;
     uint64_t        br_blockcount;
     xfs_exntst_t     br_state;
 } xfs_bmbt_irec_t;
 
 typedef struct xfs_bmbt_rec
 {
-	uint8_t			l0[8], l1[8];
+    uint8_t         l0[8], l1[8];
 } xfs_bmbt_rec_t;
 
 typedef xfs_off_t   xfs_dir2_off_t;
 typedef uint32_t    xfs_dir2_db_t;
-typedef uint        xfs_dir2_data_aoff_t;   /* argument form */
+typedef unsigned int        xfs_dir2_data_aoff_t;   /* argument form */
+typedef uint32_t    xfs_dir2_dataptr_t;
 
 static inline uint16_t get_unaligned_be16(const uint8_t *p)
 {
@@ -1308,56 +1309,66 @@ xfs_dir2_byte_to_dataptr(xfs_dir2_off_t by)
 }
 
 
-#define XFS_INO32_SIZE	4
-#define XFS_INO64_SIZE	8
+#define XFS_INO32_SIZE  4
+#define XFS_INO64_SIZE  8
 
 /*
  * Shortform directory ops
  */
 static int
 xfs_dir2_sf_entsize(
-	struct xfs_dir2_sf_hdr	*hdr,
-	int			len)
+    struct xfs_dir2_sf_hdr  *hdr,
+    int         len)
 {
-	int count = sizeof(struct xfs_dir2_sf_entry);	/* namelen + offset */
+    int count = sizeof(struct xfs_dir2_sf_entry);   /* namelen + offset */
 
-	count += len;					/* name */
-	count += hdr->i8count ? XFS_INO64_SIZE : XFS_INO32_SIZE; /* ino # */
-	return count;
+    count += len;                   /* name */
+    count += hdr->i8count ? XFS_INO64_SIZE : XFS_INO32_SIZE; /* ino # */
+    return count;
 }
 
 static int
 xfs_dir3_sf_entsize(
-	struct xfs_dir2_sf_hdr	*hdr,
-	int			len)
+    struct xfs_dir2_sf_hdr  *hdr,
+    int         len)
 {
-	return xfs_dir2_sf_entsize(hdr, len) + sizeof(uint8_t);
+    return xfs_dir2_sf_entsize(hdr, len) + sizeof(uint8_t);
 }
 
 static struct xfs_dir2_sf_entry *
 xfs_dir2_sf_nextentry(
-	struct xfs_dir2_sf_hdr	*hdr,
-	struct xfs_dir2_sf_entry *sfep)
+    struct xfs_dir2_sf_hdr  *hdr,
+    struct xfs_dir2_sf_entry *sfep)
 {
-	return (struct xfs_dir2_sf_entry *)
-		((char *)sfep + xfs_dir2_sf_entsize(hdr, sfep->namelen));
+    return (struct xfs_dir2_sf_entry *)
+        ((char *)sfep + xfs_dir2_sf_entsize(hdr, sfep->namelen));
 }
 
 static struct xfs_dir2_sf_entry *
 xfs_dir3_sf_nextentry(
-	struct xfs_dir2_sf_hdr	*hdr,
-	struct xfs_dir2_sf_entry *sfep)
+    struct xfs_dir2_sf_hdr  *hdr,
+    struct xfs_dir2_sf_entry *sfep)
 {
-	return (struct xfs_dir2_sf_entry *)
-		((char *)sfep + xfs_dir3_sf_entsize(hdr, sfep->namelen));
+    return (struct xfs_dir2_sf_entry *)
+        ((char *)sfep + xfs_dir3_sf_entsize(hdr, sfep->namelen));
 }
 
 static struct xfs_dir2_data_entry *
 xfs_dir2_data_nextentry(
     struct xfs_dir2_data_entry *daen)
 {
-    return (struct xfs_dir2_data_entry *)
-    ((char*)daen + XFS_DIR3_DATA_ENTSIZE(daen->namelen));
+    TSK_OFF_T temp, temp1;
+    temp = (offsetof(struct xfs_dir2_data_entry, name[0]) + daen->namelen + sizeof(uint16_t) + sizeof(uint8_t));
+    temp1 = (offsetof(struct xfs_dir2_data_entry, name[0]) + daen->namelen + sizeof(uint16_t) + sizeof(uint8_t));
+    temp1 = temp1 % XFS_DIR2_DATA_ALIGN;
+    temp = temp / XFS_DIR2_DATA_ALIGN;
+
+    if (temp1 != 0)
+        temp = temp + 1;
+    temp = temp * XFS_DIR2_DATA_ALIGN;
+
+    return (struct xfs_dir2_data_entry *)((char*)daen + temp);
+
 }
 
 /*

@@ -159,7 +159,8 @@ xfs_make_data_run_extent(TSK_FS_INFO * fs_info, TSK_FS_ATTR * fs_attr,
     uint32_t blkno = XFS_FSB_TO_AGBNO(xfs, irec->br_startblock);
 
     data_run->offset = 0;
-    data_run->addr = agno * tsk_getu32(fs_info->endian, xfs->fs->sb_agblocks) + blkno;
+    data_run->addr = agno * (TSK_DADDR_T)tsk_getu32(fs_info->endian, xfs->fs->sb_agblocks) + blkno;
+
     data_run->len = irec->br_blockcount;
 
     if (tsk_fs_attr_add_run(fs_info, fs_attr, data_run)) {
@@ -275,9 +276,9 @@ xfs_load_attrs(TSK_FS_FILE * fs_file)
     // not needed to implement about shortform data fork. shortform does not have location of real file.
     if (fs_file->meta->content_type == TSK_FS_META_CONTENT_TYPE_XFS_DATA_FORK_EXTENTS) {
         xfs_load_attrs_block(fs_file);
-    }
+    }   
     else if (fs_file->meta->content_type == TSK_FS_META_CONTENT_TYPE_XFS_DATA_FORK_BTREE) {
-        return 1;
+        return 1        ;
     }
     else {
         fprintf(stderr, "contenttype = unknown content type\n");
@@ -287,7 +288,7 @@ xfs_load_attrs(TSK_FS_FILE * fs_file)
     return 0;
 }
 
-
+    
 static uint8_t
 xfs_dinode_load(XFS_INFO * xfs, TSK_INUM_T dino_inum,
     xfs_dinode * dino_buf)
@@ -296,7 +297,6 @@ xfs_dinode_load(XFS_INFO * xfs, TSK_INUM_T dino_inum,
     ssize_t cnt;
     TSK_INUM_T rel_inum;
     TSK_FS_INFO *fs = (TSK_FS_INFO *) & xfs->fs_info;
-
     /*
      * Sanity check.
      * Use last_num-1 to account for virtual Orphan directory in last_inum.
@@ -317,6 +317,7 @@ xfs_dinode_load(XFS_INFO * xfs, TSK_INUM_T dino_inum,
     }
 
     addr = xfs_inode_get_offset(xfs, dino_inum);
+
     cnt = tsk_fs_read(fs, addr, (char *)dino_buf, xfs->inode_size);
     
     if (cnt != xfs->inode_size) {
@@ -456,7 +457,7 @@ xfs_dinode_copy(XFS_INFO * xfs, TSK_FS_META * fs_meta,
     // Allocating datafork area in content_ptr
     // Contents after inode core must be copied to content ptr
     TSK_OFF_T dfork_offset = xfs_inode_get_offset(xfs, inum) + sizeof(xfs_dinode);
-    
+
     char* content_buf = (char*)tsk_malloc(XFS_CONTENT_LEN_V5(xfs));
     ssize_t cnt = tsk_fs_read(fs, dfork_offset, content_buf, XFS_CONTENT_LEN_V5(xfs));
 
@@ -493,7 +494,7 @@ uint8_t xfs_inode_walk(TSK_FS_INFO * fs, TSK_INUM_T start_inum, TSK_INUM_T end_i
     TSK_INUM_T end_inum_tmp;
     TSK_FS_FILE * fs_file;
     unsigned int myflags;
-
+    
     tsk_error_reset();
 
     if(start_inum < fs->first_inum || start_inum > fs->last_inum){
@@ -568,10 +569,9 @@ xfs_inode_lookup(TSK_FS_INFO * fs, TSK_FS_FILE * a_fs_file,  // = file_add_meta
     XFS_INFO * xfs = (XFS_INFO *) fs;
     xfs_dinode * dino_buf = NULL;
     unsigned int size = 0;
-
     if (a_fs_file == NULL) {
         tsk_error_set_errno(TSK_ERR_FS_ARG);
-        tsk_error_set_errstr("ext2fs_inode_lookup: fs_file is NULL");
+        tsk_error_set_errstr("xfs_inode_lookup: fs_file is NULL");
         return 1;
     }
 
@@ -617,7 +617,7 @@ xfs_inode_lookup(TSK_FS_INFO * fs, TSK_FS_FILE * a_fs_file,  // = file_add_meta
 //fsstat
 uint8_t xfs_fsstat(TSK_FS_INFO * fs, FILE * hFile)
 {
-    uint i;
+	unsigned int i;
     XFS_INFO * xfs = (XFS_INFO *) fs;
     xfs_sb *sb = xfs->fs;
     

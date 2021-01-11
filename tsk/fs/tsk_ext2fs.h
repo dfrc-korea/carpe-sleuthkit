@@ -416,9 +416,12 @@ extern "C" {
 #define EXT2_IN_EA_INODE                0x00200000      /* Inode used for large EA */
 #define EXT2_IN_EOFBLOCKS               0x00400000      /* Blocks allocated beyond EOF */
 #define EXT2_IN_RESERVED                0x80000000      /* reserved for ext4 lib */
+#define EXT2_INLINE_DATA                0x10000000	    /* Inode has inline data */
+#define EXT2_PROJINHERIT                0x20000000	    /* Create children with the same project ID */
 #define EXT2_IN_USER_VISIBLE            0x004BDFFF      /* User visible flags */
 #define EXT2_IN_USER_MODIFIABLE         0x004B80FF      /* User modifiable flags */
 
+#define EXT2_INLINE_MAX_DATA_LEN 60  /* Max length for inline data in inode (not counting extended attribute) */
 
 /*
  * directory entries
@@ -482,6 +485,13 @@ extern "C" {
 #define EXT2_EA_IDX_TRUSTED                4
 #define EXT2_EA_IDX_LUSTRE                 5
 #define EXT2_EA_IDX_SECURITY               6
+#define EXT2_EA_IDX_SYSTEM                 7 // Possibly only valid for inline data
+#define EXT2_EA_IDX_SYSTEM_RICHACL         8
+
+
+#define EXT2_EA_MAGIC	0xEA020000
+#define EXT2_EA_INODE_OFFSET   160
+
 
 /* Entries follow the header and are aligned to 4-byte boundaries
  * the value of the attribute is stored at the bottom of the block

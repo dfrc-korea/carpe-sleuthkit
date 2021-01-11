@@ -1597,7 +1597,7 @@ static uint8_t
         tsk_error_reset();
         tsk_error_set_errno(TSK_ERR_FS);
         tsk_error_set_errstr(
-            "yaffsfs_parse_image_load_cache: Maximum inum %" PRIuOFF " is not greater than the root inum", yfs->fs_info.last_inum);
+            "yaffsfs_parse_image_load_cache: Maximum inum %" PRIuINUM " is not greater than the root inum", yfs->fs_info.last_inum);
         return TSK_ERR;
     }
 
@@ -2439,7 +2439,7 @@ static uint8_t
     YAFFSFS_INFO *yfs = (YAFFSFS_INFO *)fs;
     char ls[12];
     YAFFSFS_PRINT_ADDR print;
-    char timeBuf[32];
+    char timeBuf[128];
     YaffsCacheObject * obj = NULL;
     YaffsCacheVersion * version = NULL;
     YaffsHeader * header = NULL;
@@ -2464,7 +2464,7 @@ static uint8_t
     tsk_fs_meta_make_ls(fs_meta, ls, sizeof(ls));
     tsk_fprintf(hFile, "mode: %s\n", ls);
 
-    tsk_fprintf(hFile, "size: %" PRIuOFF "\n", fs_meta->size);
+    tsk_fprintf(hFile, "size: %" PRIdOFF "\n", fs_meta->size);
     tsk_fprintf(hFile, "num of links: %d\n", fs_meta->nlink);
 
     if(version != NULL){
@@ -3055,11 +3055,13 @@ TSK_FS_INFO *
 
     // Read config file (if it exists)
     config_file_status = yaffs_load_config_file(img_info, configParams);
-    if(config_file_status == YAFFS_CONFIG_ERROR){
+    // BL-6929(JTS): When using external readers, this call will fail.
+    // Not having a config should not be a fatal error.
+  /*if(config_file_status == YAFFS_CONFIG_ERROR){
         // tsk_error was set by yaffs_load_config
         goto on_error;
     }
-    else if(config_file_status == YAFFS_CONFIG_OK){
+    else*/ if(config_file_status == YAFFS_CONFIG_OK){
         // Validate the input
         // If it fails validation, return (tsk_error will be set up already)
         if(1 == yaffs_validate_config_file(configParams)){

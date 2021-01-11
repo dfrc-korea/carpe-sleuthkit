@@ -47,6 +47,25 @@ TSK_FS_INFO *
 tsk_fs_open_vol(const TSK_VS_PART_INFO * a_part_info,
     TSK_FS_TYPE_ENUM a_ftype)
 {
+    return tsk_fs_open_vol_decrypt(a_part_info, a_ftype, "");
+}
+
+/**
+ * \ingroup fslib
+ * Tries to process data in a volume as a file system.
+ * Allows for providing an optional password for decryption.
+ * Returns a structure that can be used for analysis and reporting.
+ *
+ * @param a_part_info Open volume to read from and analyze
+ * @param a_ftype Type of file system (or autodetect)
+ * @param a_pass Password to decrypt filesystem
+ *
+ * @return NULL on error
+ */
+TSK_FS_INFO *
+tsk_fs_open_vol_decrypt(const TSK_VS_PART_INFO * a_part_info,
+    TSK_FS_TYPE_ENUM a_ftype, const char * a_pass)
+{
     TSK_OFF_T offset;
     if (a_part_info == NULL) {
         tsk_error_reset();
@@ -65,7 +84,8 @@ tsk_fs_open_vol(const TSK_VS_PART_INFO * a_part_info,
     offset =
         a_part_info->start * a_part_info->vs->block_size +
         a_part_info->vs->offset;
-    return tsk_fs_open_img(a_part_info->vs->img_info, offset, a_ftype);
+    return tsk_fs_open_img_decrypt(a_part_info->vs->img_info, offset, 
+        a_ftype, a_pass);
 }
 
 /**
@@ -83,12 +103,34 @@ TSK_FS_INFO *
 tsk_fs_open_img(TSK_IMG_INFO * a_img_info, TSK_OFF_T a_offset,
     TSK_FS_TYPE_ENUM a_ftype)
 {
+    return tsk_fs_open_img_decrypt(a_img_info, a_offset, a_ftype, "");
+}
+
+/**
+ * \ingroup fslib
+ * Tries to process data in a disk image at a given offset as a file system.
+ * Allows for providing an optional password for decryption.
+ * Returns a structure that can be used for analysis and reporting.
+ *
+ * @param a_img_info Disk image to analyze
+ * @param a_offset Byte offset to start analyzing from
+ * @param a_ftype Type of file system (or autodetect)
+ * @param a_pass Password to decrypt filesystem. Currently only used if type is specified.
+ *
+ * @return NULL on error
+ */
+TSK_FS_INFO *
+tsk_fs_open_img_decrypt(TSK_IMG_INFO * a_img_info, TSK_OFF_T a_offset,
+    TSK_FS_TYPE_ENUM a_ftype, const char * a_pass)
+{
     TSK_FS_INFO *fs_info;
 
     const struct {
         char* name;
         TSK_FS_INFO* (*open)(TSK_IMG_INFO*, TSK_OFF_T,
                                  TSK_FS_TYPE_ENUM, uint8_t);
+        // This type should be the _DETECT version because it used
+        // during autodetection
         TSK_FS_TYPE_ENUM type;
     } FS_OPENERS[] = {
         { "NTFS",     ntfs_open,    TSK_FS_TYPE_NTFS_DETECT    },
@@ -96,13 +138,15 @@ tsk_fs_open_img(TSK_IMG_INFO * a_img_info, TSK_OFF_T a_offset,
         { "EXT2/3/4", ext2fs_open,  TSK_FS_TYPE_EXT_DETECT     },
         { "UFS",      ffs_open,     TSK_FS_TYPE_FFS_DETECT     },
         { "YAFFS2",   yaffs2_open,  TSK_FS_TYPE_YAFFS2_DETECT  },
-        { "XFS",      xfs_open,     TSK_FS_TYPE_XFS_DETECT     },
-		{ "BTRFS",    btrfs_open,   TSK_FS_TYPE_BTRFS_DETECT   },
-		{ "HIKVISION",	hikvision_open,	TSK_FS_TYPE_HIKVISION_DETECT },
 #if TSK_USE_HFS
         { "HFS",      hfs_open,     TSK_FS_TYPE_HFS_DETECT     },
 #endif
-        { "ISO9660",  iso9660_open, TSK_FS_TYPE_ISO9660_DETECT }
+        { "ISO9660",  iso9660_open, TSK_FS_TYPE_ISO9660_DETECT },
+        { "APFS",     apfs_open_auto_detect,    TSK_FS_TYPE_APFS_DETECT },
+		{ "XFS",      xfs_open,     TSK_FS_TYPE_XFS_DETECT     },
+		{ "BTRFS",    btrfs_open,   TSK_FS_TYPE_BTRFS_DETECT   },
+		{ "F2FS",     f2fs_open,    TSK_FS_TYPE_F2FS_DETECT    },
+		{ "HIKVISION",	hikvision_open,	TSK_FS_TYPE_HIKVISION_DETECT }
     };
 
     if (a_img_info == NULL) {
@@ -122,7 +166,7 @@ tsk_fs_open_img(TSK_IMG_INFO * a_img_info, TSK_OFF_T a_offset,
 
         if (tsk_verbose)
             tsk_fprintf(stderr,
-                "fsopen: Auto detection mode at offset %" PRIuOFF "\n",
+                "fsopen: Auto detection mode at offset %" PRIdOFF "\n",
                 a_offset);
 
         for (i = 0; i < sizeof(FS_OPENERS)/sizeof(FS_OPENERS[0]); ++i) {
@@ -156,7 +200,6 @@ tsk_fs_open_img(TSK_IMG_INFO * a_img_info, TSK_OFF_T a_offset,
             tsk_error_reset();
             tsk_error_set_errno(TSK_ERR_FS_UNKTYPE);
         }
-
         return fs_first;
     }
     else if (TSK_FS_TYPE_ISNTFS(a_ftype)) {
@@ -185,15 +228,21 @@ tsk_fs_open_img(TSK_IMG_INFO * a_img_info, TSK_OFF_T a_offset,
     }
     else if (TSK_FS_TYPE_ISYAFFS2(a_ftype)) {
         return yaffs2_open(a_img_info, a_offset, a_ftype, 0);
+    } 
+    else if (TSK_FS_TYPE_ISAPFS(a_ftype)) {
+        return apfs_open(a_img_info, a_offset, a_ftype, a_pass);
     }
-    else if (TSK_FS_TYPE_ISXFS(a_ftype)) {
-        return xfs_open(a_img_info, a_offset, a_ftype, 0);
-    }
+	else if (TSK_FS_TYPE_ISXFS(a_ftype)) {
+		return xfs_open(a_img_info, a_offset, a_ftype, 0);
+	}
 	else if (TSK_FS_TYPE_ISBTRFS(a_ftype)) {
 		return btrfs_open(a_img_info, a_offset, a_ftype, 0);
 	}
 	else if (TSK_FS_TYPE_ISHIKVISION(a_ftype)) {
 		return hikvision_open(a_img_info, a_offset, a_ftype, 0);
+	}
+	else if (TSK_FS_TYPE_ISF2FS(a_ftype)) {
+		return f2fs_open(a_img_info, a_offset, a_ftype, 0);
 	}
     tsk_error_reset();
     tsk_error_set_errno(TSK_ERR_FS_UNSUPTYPE);

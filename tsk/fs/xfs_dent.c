@@ -16,20 +16,6 @@
 static int files_found = 0;
 static int folders_found = 0;
 
-static int
-xfs_dir2_data_entsize(
-    int         n)
-{
-    return XFS_DIR2_DATA_ENTSIZE(n);
-}
-
-static int
-xfs_dir3_data_entsize(
-    int         n)
-{
-    return XFS_DIR3_DATA_ENTSIZE(n);
-}
-
 static uint8_t
 xfs_dir2_data_get_ftype(
     struct xfs_dir2_data_entry *dep)
@@ -110,7 +96,7 @@ xfs_dent_copy(XFS_INFO * xfs,
 
         strncpy(fs_name->name, ent->name, ent->namelen);
         fs_name->name[ent->namelen] = '\0';
-        fs_name->meta_addr = tsk_getu64(xfs->fs_info.endian, ent->inumber);
+        fs_name->meta_addr = (TSK_INUM_T)tsk_getu64(xfs->fs_info.endian, ent->inumber);
         fs_name->type = TSK_FS_NAME_TYPE_UNDEF;
 
         if (ent->namelen >= fs_name->name_size){
@@ -215,6 +201,7 @@ xfs_dent_parse_shortform(XFS_INFO * xfs, TSK_FS_DIR * a_fs_dir,
 
         ent = xfs_dir3_sf_nextentry(hdr, ent);
     }
+
     tsk_fs_name_free(fs_name);
     return TSK_OK;
 }
@@ -266,8 +253,8 @@ xfs_dent_parse_block(XFS_INFO * xfs, TSK_FS_DIR * a_fs_dir,
     uint32_t agno = XFS_FSB_TO_AGNO(xfs, irec->br_startblock);
     uint32_t agblkno = XFS_FSB_TO_AGBNO(xfs, irec->br_startblock);
 
-    TSK_OFF_T soff = (agno * tsk_getu32(xfs->fs_info.endian, xfs->fs->sb_agblocks) + agblkno)
-        * tsk_getu32(xfs->fs_info.endian, xfs->fs->sb_blocksize); // real offset
+    TSK_OFF_T soff = (agno * (TSK_OFF_T)tsk_getu32(xfs->fs_info.endian, xfs->fs->sb_agblocks) + agblkno)
+        * (TSK_OFF_T)tsk_getu32(xfs->fs_info.endian, xfs->fs->sb_blocksize); // real offset
 
     ssize_t len = irec->br_blockcount * tsk_getu32(xfs->fs_info.endian, xfs->fs->sb_blocksize);
 
@@ -275,13 +262,6 @@ xfs_dent_parse_block(XFS_INFO * xfs, TSK_FS_DIR * a_fs_dir,
     ssize_t cnt = tsk_fs_read(fs_info, soff, fbuf, len);
 
     struct xfs_dir3_data_hdr *hdr = (struct xfs_dir3_data_hdr_t*)fbuf;
-
-    // sanity check
-    if (hdr->hdr.magic != 0x33424458) { // XDB3
-        fprintf(stderr, "[i] xfs_dent_parse_block: xfs.c: %d - not a dir2_data_hdr: %8x\n",
-            __LINE__, hdr->hdr.magic);
-        return TSK_ERR;
-    }
 
     xfs_dir2_data_entry_t *ent = (xfs_dir2_data_entry_t*)((char*)(hdr + 1) + 32); // magically should be happened
 
@@ -394,6 +374,8 @@ xfs_dir_open_meta(TSK_FS_INFO * a_fs, TSK_FS_DIR ** a_fs_dir,
         tsk_error_errstr2_concat("- xfs_dir_open_meta");
         return TSK_COR;
     }
+
+    //fs_meta = fs_dir->fs_file->meta;
 
     // We only read in and process a single block at a time
     if ((dirbuf = tsk_malloc((size_t)a_fs->block_size)) == NULL) {

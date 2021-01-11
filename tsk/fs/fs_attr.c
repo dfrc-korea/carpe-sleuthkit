@@ -292,8 +292,8 @@ tsk_fs_attr_set_run(TSK_FS_FILE * a_fs_file, TSK_FS_ATTR * a_fs_attr,
     if (alloc_size < size) {
         tsk_error_reset();
         tsk_error_set_errno(TSK_ERR_FS_ARG);
-        tsk_error_set_errstr("tsk_fs_attr_set_run: alloc_size (%" PRIuOFF
-            ") is less than size (%" PRIuOFF ")", alloc_size, size);
+        tsk_error_set_errstr("tsk_fs_attr_set_run: alloc_size (%" PRIdOFF
+            ") is less than size (%" PRIdOFF ")", alloc_size, size);
         return 1;
     }
 
@@ -371,7 +371,6 @@ dump_attr(TSK_FS_ATTR * a_fs_attr)
  */
 uint8_t
 tsk_fs_attr_print(const TSK_FS_ATTR * a_fs_attr, FILE* hFile) {
-    TSK_FS_ATTR_RUN *cur_run;
     TSK_FS_ATTR_RUN *fs_attr_run;
     uint32_t skip_remain;
     TSK_OFF_T tot_size;
@@ -384,7 +383,6 @@ tsk_fs_attr_print(const TSK_FS_ATTR * a_fs_attr, FILE* hFile) {
         return TSK_ERR;
     }
 
-    cur_run = a_fs_attr->nrd.run;
     tot_size = a_fs_attr->size;
     skip_remain = a_fs_attr->nrd.skiplen;
 
@@ -445,14 +443,15 @@ tsk_fs_attr_print(const TSK_FS_ATTR * a_fs_attr, FILE* hFile) {
             }
         }    
 
-        if (cur_run->flags & TSK_FS_ATTR_RUN_FLAG_SPARSE) {
-            tsk_fprintf(hFile, "  Staring address: X, length: %lld  Sparse", run_len);
+        if (fs_attr_run->flags & TSK_FS_ATTR_RUN_FLAG_SPARSE) {
+            tsk_fprintf(hFile, "  Starting address: X, length: %lld  Sparse", run_len);
         }
-        else if (cur_run->flags & TSK_FS_ATTR_RUN_FLAG_FILLER) {
-            tsk_fprintf(hFile, "  Staring address: X, length: %lld  Filler", run_len);
+        else if (fs_attr_run->flags & TSK_FS_ATTR_RUN_FLAG_FILLER) {
+            tsk_fprintf(hFile, "  Starting address: X, length: %lld  Filler", run_len);
         }
         else {
-            tsk_fprintf(hFile, "  Staring address: %lld, length: %lld", run_start_addr, run_len);
+            tsk_fprintf(hFile, "  Starting address: %lld, length: %lld  %s", run_start_addr, run_len, 
+                (fs_attr_run->flags & TSK_FS_ATTR_RUN_FLAG_ENCRYPTED) ? "Encrypted": "");
         }
         tsk_fprintf(hFile, "\n");
         if (stop_loop) {
@@ -528,7 +527,7 @@ tsk_fs_attr_add_run(TSK_FS_INFO * a_fs, TSK_FS_ATTR * a_fs_attr,
 
         if (tsk_verbose)
             tsk_fprintf(stderr,
-                "tsk_fs_attr_add: %" PRIuOFF "@%" PRIuOFF
+                "tsk_fs_attr_add: %" PRIuDADDR "@%" PRIuDADDR
                 " (Filler: %s)\n", data_run_cur->offset, data_run_cur->len,
                 (data_run_cur->flags & TSK_FS_ATTR_RUN_FLAG_FILLER) ? "Yes"
                 : "No");
@@ -543,7 +542,7 @@ tsk_fs_attr_add_run(TSK_FS_INFO * a_fs, TSK_FS_ATTR * a_fs_attr,
                 tsk_error_set_errno(TSK_ERR_FS_GENFS);
                 tsk_error_set_errstr
                     ("tsk_fs_attr_add_run: could not add data_run b.c. offset (%"
-                    PRIuOFF ") is larger than FILLER (%" PRIuOFF ") (%"
+						PRIuDADDR ") is larger than FILLER (%" PRIuDADDR ") (%"
                     PRIuINUM ")", a_data_run_new->offset,
                     data_run_cur->offset, a_fs_attr->fs_file->meta->addr);
                 if (tsk_verbose)
@@ -925,8 +924,8 @@ tsk_fs_attr_walk_nonres(const TSK_FS_ATTR * fs_attr,
                 else {
                     ssize_t cnt;
 
-                    cnt = tsk_fs_read_block
-                        (fs, addr + len_idx, buf, fs->block_size);
+                    cnt = tsk_fs_read_block_decrypt
+                        (fs, addr + len_idx, buf, fs->block_size, fs_attr_run->crypto_id + len_idx);
                     if (cnt != fs->block_size) {
                         if (cnt >= 0) {
                             tsk_error_reset();
@@ -1128,7 +1127,7 @@ tsk_fs_attr_read(const TSK_FS_ATTR * a_fs_attr, TSK_OFF_T a_offset,
         if (a_offset >= a_fs_attr->size) {
             tsk_error_reset();
             tsk_error_set_errno(TSK_ERR_FS_READ_OFF);
-            tsk_error_set_errstr("tsk_fs_attr_read - %" PRIuOFF, a_offset);
+            tsk_error_set_errstr("tsk_fs_attr_read - %" PRIdOFF, a_offset);
             return -1;
         }
 
@@ -1157,7 +1156,7 @@ tsk_fs_attr_read(const TSK_FS_ATTR * a_fs_attr, TSK_OFF_T a_offset,
                 && (a_offset >= a_fs_attr->size))) {
             tsk_error_reset();
             tsk_error_set_errno(TSK_ERR_FS_READ_OFF);
-            tsk_error_set_errstr("tsk_fs_attr_read - %" PRIuOFF, a_offset);
+            tsk_error_set_errstr("tsk_fs_attr_read - %" PRIdOFF, a_offset);
             return -1;
         }
 
@@ -1259,15 +1258,16 @@ tsk_fs_attr_read(const TSK_FS_ATTR * a_fs_attr, TSK_OFF_T a_offset,
                 fs_offset_b += byteoffset_toread;
 
                 cnt =
-                    tsk_fs_read(fs, fs_offset_b,
-                    &a_buf[len_toread - len_remain], len_inrun);
+                    tsk_fs_read_decrypt(fs, fs_offset_b,
+                    &a_buf[len_toread - len_remain], len_inrun, 
+                    data_run_cur->crypto_id + blkoffset_inrun);
                 if (cnt != (ssize_t)len_inrun) {
                     if (cnt >= 0) {
                         tsk_error_reset();
                         tsk_error_set_errno(TSK_ERR_FS_READ);
                     }
                     tsk_error_set_errstr2
-                        ("tsk_fs_attr_read_type: offset: %" PRIuOFF
+                        ("tsk_fs_attr_read_type: offset: %" PRIdOFF
                         "  Len: %" PRIuSIZE "", fs_offset_b, len_inrun);
                     return cnt;
                 }

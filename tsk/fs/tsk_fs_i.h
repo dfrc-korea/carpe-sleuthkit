@@ -122,7 +122,6 @@ extern "C" {
 
     /* FS_DATA_RUN */
     extern TSK_FS_ATTR_RUN *tsk_fs_attr_run_alloc();
-    extern void tsk_fs_attr_run_free(TSK_FS_ATTR_RUN *);
 
     /* FS_META */
     extern TSK_FS_META *tsk_fs_meta_alloc(size_t);
@@ -199,12 +198,19 @@ extern "C" {
         TSK_FS_TYPE_ENUM, uint8_t);
     extern TSK_FS_INFO *yaffs2_open(TSK_IMG_INFO *, TSK_OFF_T,
         TSK_FS_TYPE_ENUM, uint8_t);
-    extern TSK_FS_INFO *xfs_open(TSK_IMG_INFO *, TSK_OFF_T,
-        TSK_FS_TYPE_ENUM, uint8_t);
+	extern TSK_FS_INFO *f2fs_open(TSK_IMG_INFO *, TSK_OFF_T,
+		TSK_FS_TYPE_ENUM, uint8_t);
+	extern TSK_FS_INFO *xfs_open(TSK_IMG_INFO *, TSK_OFF_T,
+		TSK_FS_TYPE_ENUM, uint8_t);
 	extern TSK_FS_INFO *btrfs_open(TSK_IMG_INFO *, TSK_OFF_T,
 		TSK_FS_TYPE_ENUM, uint8_t);
 	extern TSK_FS_INFO *hikvision_open(TSK_IMG_INFO *, TSK_OFF_T,
 		TSK_FS_TYPE_ENUM, uint8_t);
+    /* Specific pool file system routines */
+    extern TSK_FS_INFO *apfs_open_auto_detect(TSK_IMG_INFO*, TSK_OFF_T,
+        TSK_FS_TYPE_ENUM, uint8_t);
+    extern TSK_FS_INFO *apfs_open(TSK_IMG_INFO*, TSK_OFF_T,
+        TSK_FS_TYPE_ENUM, const char*);
 
     /* Generic functions for swap and raw -- many say "not supported" */
     extern uint8_t tsk_fs_nofs_fsstat(TSK_FS_INFO * fs, FILE * hFile);
